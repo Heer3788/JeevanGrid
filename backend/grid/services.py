@@ -16,6 +16,7 @@ CONFIG_MODELS = {'solar': m.SolarConfig, 'wind': m.WindConfig, 'battery': m.Batt
 
 def configuration(site):
     c = {key: getattr(site, key).data for key in CONFIG_MODELS}
+    c['generator'] = {**default_configuration()['generator'], **c['generator']}
     c['demand'] = site.load_profile.data
     c['flexible_loads'] = list(site.flexible_loads.values_list('data', flat=True))
     return c

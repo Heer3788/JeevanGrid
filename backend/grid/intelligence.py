@@ -189,9 +189,11 @@ def analyze_run(run, now=None):
     if not service_equal: cautions.append('Served demand differs. Cost and fuel differences are not like-for-like savings; compare service first.')
     if not terminal_equal: cautions.append('Ending battery SOC differs. Part of the cost difference reflects energy left in storage.')
     if not rm['terminal_reserve_met']: cautions.append('The reactive controller misses the terminal reserve. It has no end-of-day look-ahead.')
+    enhanced_rules = g.get('min_up_hours',1)>1 or g.get('min_down_hours',1)>1 or g.get('ramp_kw_per_hour',g['capacity_kw'])<g['capacity_kw'] or 'live_session_id' in snapshot
+    if enhanced_rules: cautions.append('The illustrative reactive policy does not implement the live model’s minimum run/cooldown, ramp constraints or carried flexible-job deadlines. This comparison is not like-for-like.')
     result['comparison'] = {'controller': 'Renewables → battery to operating reserve → diesel; flexible work runs as early as possible.',
                             'baseline': reactive, 'optimized_metrics': metrics, 'delta': differences,
-                            'like_for_like': service_equal and terminal_equal and rm['terminal_reserve_met'],
+                            'like_for_like': service_equal and terminal_equal and rm['terminal_reserve_met'] and not enhanced_rules,
                             'warnings': cautions, 'basis': 'Same frozen inputs; illustrative reactive policy, not measured site operation.'}
     flex_equal = abs(metrics['flexible_unserved_kwh'] - rm['flexible_unserved_kwh']) <= .001
     result['comparison']['flexible_energy_shifted_kwh'] = (sum(abs(a['flexible_load_scheduled'] - b['flexible_load_scheduled']) for a, b in zip(dispatch, reactive['intervals'])) / 2 if flex_equal else None)

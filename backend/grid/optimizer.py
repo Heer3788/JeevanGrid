@@ -1,6 +1,7 @@
 """Pure, deterministic 24-hour dispatch model; no database or network calls."""
 from copy import deepcopy
 import time
+import math
 import pandas as pd
 import pulp as lp
 
@@ -12,6 +13,8 @@ def solve(snapshot, overrides=None):
     c = s['configuration']
     b, g, policy = c['battery'], c['generator'], c['policy']
     state = s['state']
+    strategy = s.get('strategy', 'lowest_cost')
+    carbon_price = s.get('carbon_price_inr_per_kg', 5) if strategy == 'balanced' else 0
     initial = overrides.get('starting_soc', state['soc_pct'])
     failed = lambda message, status='infeasible': {'status': status, 'metrics': {}, 'intervals': [],
                    'diagnostics': [message], 'next_action': {'action': 'REVIEW_CONFIGURATION', 'reason': message},
@@ -36,6 +39,7 @@ def solve(snapshot, overrides=None):
     ch, dis = var('charge', b['max_charge_kw']), var('discharge', b['max_discharge_kw'])
     energy = var('energy', n=25)
     on, starts, charging = var('diesel_on', binary=True), var('diesel_start', binary=True), var('charging_mode', binary=True)
+    stops = var('diesel_stop', binary=True)
     diesel, uc, un = var('diesel'), var('critical_unserved'), var('normal_unserved')
     flex_vars, flex_missed = [], []
     for j, f in enumerate(c['flexible_loads']):
@@ -43,7 +47,9 @@ def solve(snapshot, overrides=None):
         missed = lp.LpVariable(f'flex_missed_{j}', lowBound=0)
         for t in range(24):
             if not (f['start_hour'] <= fractional_hours[t] and fractional_hours[t]+1 <= f['end_hour']): model += task[t] == 0
-        model += lp.lpSum(task.values()) + missed == f['required_kwh'] * demand_factor
+            if 'window_start' in f and not (pd.Timestamp(f['window_start']) <= local_times[t] and local_times[t]+pd.Timedelta(hours=1) <= pd.Timestamp(f['window_end'])):
+                model += task[t] == 0
+        model += lp.lpSum(task.values()) + missed == f['required_kwh'] * (1 if 'window_start' in f else demand_factor)
         flex_vars.append(task); flex_missed.append(missed)
     model += energy[0] == initial/100*b['capacity_kwh']
     for t in range(25):
@@ -66,6 +72,19 @@ def solve(snapshot, overrides=None):
         model += starts[t] >= on[t]-previous
         model += starts[t] <= on[t]
         model += starts[t] <= 1-previous
+        model += stops[t] == previous - on[t] + starts[t]
+        up, down = g.get('min_up_hours', 1), g.get('min_down_hours', 1)
+        for k in range(t, min(24, t+up)): model += on[k] >= starts[t]
+        for k in range(t, min(24, t+down)): model += on[k] <= 1-stops[t]
+        elapsed = state.get('generator_elapsed_hours', 24)
+        remaining = max(0, math.ceil((up if state.get('generator_on') else down)-elapsed))
+        if t < remaining and state['generator_available'] and not outage:
+            model += on[t] == int(state.get('generator_on', False))
+        prior_power = diesel[t-1] if t else state.get('generator_kw', g['min_power_kw'] if previous else 0)
+        ramp = g.get('ramp_kw_per_hour', g['capacity_kw'])
+        # Start/stop transitions permit the minimum stable loading step.
+        model += diesel[t]-prior_power <= ramp + g['min_power_kw']*starts[t]
+        model += prior_power-diesel[t] <= ramp + g['min_power_kw']*stops[t] + (g['capacity_kw'] if outage or not state['generator_available'] else 0)
         model += uc[t] <= critical[t]; model += un[t] <= normal[t]
         model += pv[t]+wt[t]+dis[t]+diesel[t] == critical[t]-uc[t]+normal[t]-un[t]+lp.lpSum(f[t] for f in flex_vars)+ch[t]
         fuel.append(g['fuel_slope']*diesel[t]+g['fuel_intercept']*on[t])
@@ -78,8 +97,13 @@ def solve(snapshot, overrides=None):
     cash = lp.lpSum(fuel)*price + lp.lpSum(starts.values())*g['start_cost']
     cost = cash + lp.lpSum(dis.values())*wear
     cost += (sum(solar)+sum(wind)-renewables)*policy['curtailment_penalty'] + shortfall*policy['renewable_shortfall_penalty']
+    emissions = lp.lpSum(fuel)*g['emissions_factor']
+    carbon_cost = emissions*carbon_price
+    cost += carbon_cost
     # Lexicographic solves: no financial weight can buy avoidable critical outages.
-    objectives = [lp.lpSum(uc.values()), lp.lpSum(un.values()), lp.lpSum(flex_missed), cost]
+    objectives = [lp.lpSum(uc.values()), lp.lpSum(un.values()), lp.lpSum(flex_missed)]
+    if strategy == 'lowest_emissions': objectives.append(emissions)
+    objectives.append(cost)
     statuses = []
     try:
         for i, objective in enumerate(objectives):
@@ -90,7 +114,7 @@ def solve(snapshot, overrides=None):
             if model.sol_status not in [lp.LpSolutionOptimal, lp.LpSolutionIntegerFeasible]:
                 return failed('Solver could not find a valid plan within the time limit.', 'failed')
             statuses.append(model.sol_status)
-            if i < 3: model += objective <= max(0, lp.value(objective) or 0) + 1e-7
+            if i < len(objectives)-1: model += objective <= max(0, lp.value(objective) or 0) + 1e-7
     except lp.PulpSolverError as exc:
         return failed(f'HiGHS solver unavailable: {exc}', 'failed')
     value = lambda v: max(0., float(lp.value(v) or 0))
@@ -111,7 +135,7 @@ def solve(snapshot, overrides=None):
         if abs(residual) > .001: return failed('Post-solve energy-balance validation failed.', 'failed')
         intervals.append(d)
     total = lambda key: sum(d[key] for d in intervals)
-    flex_required = sum(f['required_kwh'] for f in c['flexible_loads'])*demand_factor
+    flex_required = sum(f['required_kwh']*(1 if 'window_start' in f else demand_factor) for f in c['flexible_loads'])
     required = sum(critical)+sum(normal)+flex_required
     served = total('served_load')
     renewable = total('solar_used')+total('wind_used')
@@ -132,7 +156,8 @@ def solve(snapshot, overrides=None):
         'fuel_cost_inr': total('diesel_litres')*price, 'generator_start_cost_inr': total('diesel_start')*g['start_cost'],
         'battery_wear_cost_inr': total('battery_discharge')*wear,
         'cash_cost_inr': value(cash), 'dispatch_cost_inr': value(cash)+total('battery_discharge')*wear,
-        'penalty_cost_inr': max(0, value(cost)-value(cash)-total('battery_discharge')*wear),
+        'penalty_cost_inr': max(0, value(cost)-value(cash)-total('battery_discharge')*wear-value(carbon_cost)),
+        'carbon_cost_inr': value(carbon_cost), 'strategy': strategy,
         'objective_value_inr': value(cost), 'generator_starts': total('diesel_start'), 'generator_hours': total('diesel_on'),
         'emissions_kg_co2': total('diesel_litres')*g['emissions_factor'], 'renewable_curtailed_kwh': total('renewable_curtailment'),
         'battery_discharge_kwh': total('battery_discharge'), 'basis': 'projected',

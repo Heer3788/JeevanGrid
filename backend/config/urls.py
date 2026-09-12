@@ -2,8 +2,15 @@ from django.contrib import admin
 from django.urls import path
 from rest_framework_simplejwt.views import TokenRefreshView
 from grid import views as v
+from grid import live_views as lv
 
 urlpatterns = [
+    path('api/sites/<int:pk>/live',lv.session),
+    path('api/sites/<int:pk>/live/events',lv.event),
+    path('api/sites/<int:pk>/live/commands/<int:command_id>',lv.decision),
+    path('api/sites/<int:pk>/live/strategies',lv.strategies),
+    path('api/sites/<int:pk>/forecast-model',lv.models),
+    path('api/sites/<int:pk>/forecast-model/dataset',lv.dataset),
     path('admin/', admin.site.urls),
     path('api/optimization-runs/<int:pk>/analysis', v.run_analysis),
     path('api/optimization-runs/<int:pk>/scenarios', v.run_scenarios),

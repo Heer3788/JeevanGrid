@@ -1,4 +1,22 @@
 # Reproduce the versions used for local verification; optional Node/Chrome tooling excluded.
+channels==4.3.2
+uvicorn[standard]==0.52.4
+xgboost-cpu==3.4.1; sys_platform == 'linux'
+xgboost==3.4.1; sys_platform != 'linux'
+scikit-learn==1.9.1
+click==8.5.0
+h11==0.16.0
+joblib==1.6.0
+cloudpickle==3.1.2
+narwhals==2.26.0
+threadpoolctl==3.6.0
+httptools==0.8.0
+python-dotenv==1.2.3
+PyYAML==6.0.3
+uvloop==0.22.1; sys_platform != 'win32'
+watchfiles==1.2.0
+websockets==17.1
+anyio==4.15.1
 asgiref==3.12.1
 certifi==2026.7.22
 charset-normalizer==3.5.1

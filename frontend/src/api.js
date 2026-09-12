@@ -8,6 +8,14 @@ export function tokens(value) {
 }
 export const hasSession=()=>!!refresh;
 export const refreshToken=()=>refresh;
+export const accessToken=()=>access;
+export async function downloadDataset(siteId) {
+  await api('/auth/me');
+  const res=await fetch(`/api/sites/${siteId}/forecast-model/dataset`,{headers:{Authorization:`Bearer ${access}`}});
+  if(!res.ok)throw Error('Could not download training data.');
+  const url=URL.createObjectURL(await res.blob());const a=document.createElement('a');
+  a.href=url;a.download=`site-${siteId}-training.csv`;a.click();URL.revokeObjectURL(url);
+}
 function message(body) {
   if (typeof body==='string') return body;
   if (Array.isArray(body)) return body.map(message).join(' ');

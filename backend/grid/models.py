@@ -139,3 +139,61 @@ class OperatorDecision(models.Model):
     decision = models.CharField(max_length=16, choices=[('confirm', 'Confirm'), ('override', 'Override')])
     reason = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+
+
+class LiveSession(models.Model):
+    site = models.ForeignKey(Site, on_delete=models.CASCADE, related_name='live_sessions')
+    active = models.BooleanField(default=False)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True)
+    configuration_version = models.PositiveIntegerField()
+    snapshot = models.JSONField(default=dict)
+    state = models.JSONField(default=dict)
+    options = models.JSONField(default=dict)
+    simulated_at = models.DateTimeField()
+    heartbeat = models.DateTimeField(null=True)
+    last_plan_at = models.DateTimeField(null=True)
+    latest_run = models.ForeignKey(OptimizationRun, on_delete=models.SET_NULL, null=True)
+    events = models.JSONField(default=list)
+
+    class Meta:
+        ordering = ['-pk']
+        constraints = [models.UniqueConstraint(fields=['site'], condition=models.Q(active=True), name='one_active_live_session')]
+
+
+class TelemetrySample(models.Model):
+    session = models.ForeignKey(LiveSession, on_delete=models.CASCADE, related_name='samples')
+    timestamp = models.DateTimeField()
+    received_at = models.DateTimeField(auto_now_add=True)
+    data = models.JSONField(default=dict)
+    provenance = models.CharField(max_length=40, default='simulated')
+
+    class Meta:
+        ordering = ['-timestamp', '-pk']
+
+
+class ControlCommand(models.Model):
+    session = models.ForeignKey(LiveSession, on_delete=models.CASCADE, related_name='commands')
+    run = models.ForeignKey(OptimizationRun, on_delete=models.CASCADE)
+    status = models.CharField(max_length=20, default='proposed')
+    proposal = models.JSONField(default=dict)
+    result = models.JSONField(default=dict)
+    reason = models.TextField(blank=True)
+    reviewed_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    reviewed_at = models.DateTimeField(null=True)
+    expires_at = models.DateTimeField()
+
+    class Meta:
+        ordering = ['-pk']
+
+
+class ForecastModel(models.Model):
+    site = models.ForeignKey(Site, on_delete=models.CASCADE, related_name='forecast_models')
+    created_at = models.DateTimeField(auto_now_add=True)
+    configuration_version = models.PositiveIntegerField()
+    provenance = models.CharField(max_length=40)
+    report = models.JSONField(default=dict)
+    artifacts = models.JSONField(default=dict)
+
+    class Meta:
+        ordering = ['-pk']

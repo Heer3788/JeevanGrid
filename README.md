@@ -1,6 +1,52 @@
 # JeevanGrid
 
-A local React + Django application for planning and stress-testing rural microgrid operation. Recommended plans are produced by PuLP/HiGHS; an independent, deterministic reactive controller provides an explicitly labelled comparison. No ML or equipment control is included.
+JeevanGrid is an advisory energy-mix optimizer for rural and off-grid microgrids. It combines site equipment, operating rules, weather, demand and current battery/generator state to calculate a 24-hour schedule for solar, wind, battery storage and diesel. The optimization protects critical demand first, then reduces operating cost, diesel consumption and emissions where the configured equipment makes that possible.
+
+The repository also contains a software microgrid simulator. It streams clearly labelled simulated telemetry, triggers a new optimization every five simulated minutes or after a disruption, and executes operator-approved commands inside the simulator. It does not currently communicate with physical meters, inverters, batteries or generators.
+
+## Project status
+
+### Implemented and working
+
+- React dashboard with Django REST APIs, JWT authentication and organization-scoped Admin/Operator permissions.
+- Site setup for location, solar, wind, battery, diesel generator, demand classes, flexible loads, costs and operating constraints.
+- Open-Meteo forecast retrieval and NASA POWER historical-weather replay, with timestamps, provenance and stale-data handling.
+- `pvlib` solar estimation, hub-height wind conversion and a piecewise turbine power curve.
+- PuLP/HiGHS mixed-integer optimization over 24 hourly intervals.
+- Reliability-first dispatch: critical load, normal load and flexible work are optimized in that order before cost.
+- Battery SOC, charge/discharge power, efficiency, reserve, terminal SOC and estimated wear cost.
+- Diesel capacity, minimum stable power, fuel curve, fuel availability, allowed hours, maximum starts, minimum run/cooldown and ramp constraints.
+- Lowest Cost, Balanced and Lowest Emissions dispatch preferences. Reliability retains priority in every strategy.
+- Six preset resilience scenarios, custom what-if inputs and baseline-versus-scenario comparison.
+- Multi-site portfolio comparison, plan history, immutable run snapshots, input provenance and CSV/JSON exports.
+- Live Control digital twin with WebSocket updates, event injection, automatic rolling replanning and operator approval/rejection.
+- Simulated command lifecycle: proposed, approved, executing, verified, rejected, expired/failed or superseded.
+- XGBoost demand forecasting and XGBoost solar-residual correction, with chronological train/calibration/test periods and baseline fallback.
+- Conservative forecast inputs using calibration residual bounds, or explicit stress margins when no eligible model exists.
+- Guided demonstration, observed simulation evidence cards and exportable audit/event records.
+
+### Data and claims
+
+- The Leporiang reference demand and capacities come from a published study and are labelled as study/model values.
+- Reference hourly demand is generated from the published daily energy and peak; it is labelled simulated from published totals.
+- Open-Meteo and NASA POWER provide regional weather data, not electrical measurements from the site.
+- The digital twin provides simulated operating telemetry. Its results demonstrate system behaviour, not measured village uptime or savings.
+- Models trained on synthetic data are eligible only for simulated runs. Their held-out scores prove the ML pipeline works on that dataset, not field accuracy.
+- Optimization outputs are recommendations. No physical equipment is controlled by this version.
+
+### Yet to be done for a field deployment / Round 3
+
+- Connect authenticated site telemetry from energy meters, inverter, battery BMS and generator controller through an edge gateway.
+- Implement and commission vendor-specific read/write adapters such as Modbus or MQTT behind the existing telemetry and command interfaces.
+- Add electrical safety interlocks, hardware fail-safe behaviour, manual local control and commissioned operator procedures.
+- Collect actual site demand and generation history, preserve the forecast available at issue time, retrain the models and report field backtests.
+- Compare planned dispatch with measured dispatch, including command acknowledgement, device alarms and communications failures.
+- Add sub-hourly control only after modelling inverter dynamics, voltage, frequency, protection and distribution constraints. The current optimizer is hourly supervisory scheduling.
+- Add multi-day fuel-delivery and extended-weather planning if the field use case requires it.
+- Move SQLite to PostgreSQL and add a production job/streaming architecture for concurrent sites and durable telemetry ingestion.
+- Configure production secrets, TLS, monitoring, backups and deployment infrastructure.
+
+The detailed feature test is in [LIVE_WALKTHROUGH.md](LIVE_WALKTHROUGH.md).
 
 ## Quick start
 
@@ -32,7 +78,7 @@ cd ..
 py dev.py
 ```
 
-Open **http://127.0.0.1:5173**. The Django API listens on port 8000; Vite proxies `/api` requests. Both servers bind to localhost. `Ctrl+C` stops the launcher. For the current workspace a local Node runtime is also installed in `.venv/bin`; `dev.py` finds it automatically.
+Open **http://127.0.0.1:5173**. The ASGI API/WebSocket server listens on port 8000, the simulation worker advances active digital twins, and Vite serves the frontend and proxies `/api` and `/ws`. All services bind locally. `Ctrl+C` stops the launcher. The launcher checks ports 8000 and 5173 before starting, so it will not leave a partial duplicate instance running.
 
 Demo accounts:
 
@@ -59,6 +105,30 @@ The operator is assigned the reference and compact sites only. Set `JEEVANGRID_D
 - Multi-site reliability table, 2–5 site comparison, normalized costs, critical-energy weighted cohorts and sequential portfolio resilience packs.
 - Desktop and mobile layouts, visible provenance, projected metric labels, stale-data and infeasible-plan states.
 
+## How the current system works
+
+```text
+Site equipment, costs and operating rules
+                  +
+Weather forecast and demand profile
+                  +
+Current SOC, fuel and generator state
+                  ↓
+pvlib solar model + wind curve + eligible XGBoost corrections
+                  ↓
+PuLP/HiGHS reliability-first MILP optimization
+                  ↓
+24-hour renewable, battery, diesel and flexible-load schedule
+                  ↓
+Plain-language recommendation
+                  ↓
+Operator confirms/overrides a plan or approves/rejects a simulated command
+                  ↓
+New simulated telemetry or disruption triggers rolling replanning
+```
+
+Open-Meteo supplies weather forecasts; JeevanGrid does not use ML to predict weather. XGBoost estimates demand and can correct the error around the physics-based solar estimate. The optimizer then selects the energy mix while enforcing equipment limits and accounting for fuel price, generator starts, battery wear and diesel emissions.
+
 ## Renewable energy intelligence workspace
 
 - **Portfolio:** offline interactive geography, grouped markers for shared coordinates, a site inspector, clear reliability labels, and normalized site comparison.
@@ -68,6 +138,7 @@ The operator is assigned the reference and compact sites only. Set `JEEVANGRID_D
 - **Impact analysis:** compare optimized and reactive operation for the same saved inputs. View fuel, cost, emissions, service, generator starts, ending SOC and shifted flexible energy. Negative differences mean optimized minus reactive, not automatically a saving.
 - **What if?:** a six-scenario resilience matrix linked to one baseline, alongside custom experiments. Only runs with the exact preset overrides fill the preset matrix; custom variants remain in history. Runs execute sequentially.
 - **Data & assumptions:** readable equipment cards, source age, configuration version, missing-weather checks and manual-reading timestamps. Raw JSON remains available under developer details. Historical runs also expose their own Dataset Explorer and Impact analysis.
+- **Live Control:** simulated solar, wind, demand, SOC, fuel and generator output; WebSocket updates; automatic five-minute rolling plans; disruption buttons; command review and verification; strategy comparison; ML backtest results; evidence export.
 
 The comparison controller uses current-hour renewables, then storage down to the configured operating reserve, then diesel. Flexible tasks run at the earliest possible allowed hour; unfinished work is retried within its window. Fuel availability, start limits, generator minimum loading, allowed hours, battery power and efficiency are enforced. It has no weather look-ahead or hard terminal SOC constraint. This is an illustrative policy, not an assertion about how an actual operator behaves.
 
@@ -82,7 +153,9 @@ GET /api/optimization-runs/{id}/analysis
 GET /api/optimization-runs/{id}/scenarios
 ```
 
-ML remains deferred until issued forecasts can be checked against later observations. Regional historical weather alone is not site generation telemetry or proof of forecast accuracy.
+The Live Control workspace includes demand forecasting and solar residual correction. Demo training uses explicitly simulated observations. Uploaded hourly data is also supported. Training, calibration and evaluation use disjoint chronological periods; models must beat the baseline on calibration before selection. Regional historical weather alone is not site generation telemetry or proof of operational forecast accuracy. Synthetic model versions cannot influence API-weather runs.
+
+The live loop is a software demonstration with an hourly optimization model. Five-minute replanning means the optimizer re-evaluates that 24-hour hourly schedule using the latest simulated SOC, fuel, generator state, remaining flexible work and event conditions. It does not imply millisecond electrical control.
 
 ### Django database administration
 
@@ -145,11 +218,11 @@ Renewable share means used solar+wind divided by used solar+wind+diesel generati
 
 Reliability is projected energy adequacy over hourly intervals, not measured uptime or a probabilistic outage guarantee. Base critical shortages, stale forecasts or changed configurations are red. An unassessed resilience pack or reserve risk is amber; green requires evaluated scenarios with critical service and operating reserve preserved. Portfolio cohorts only combine identical modes and horizon starts; costs and fuel are normalized by served energy. Zero denominators appear as unavailable.
 
-Forecasts have a six-hour freshness gate. Manual readings include age/provenance but are operator-entered assumptions, not continuous telemetry. Confirmation records a human review only. A changed or superseded plan cannot be approved.
+Forecasts have a six-hour freshness gate. Readings in the ordinary Site readings tab are manual operator inputs. Live Control uses continuous simulated telemetry from the digital twin. Confirmation records human review of an advisory plan; Live Control approval applies a command only to the simulated plant. Changed, expired or superseded commands cannot execute.
 
 ## Verification
 
-Verified on this laptop: 57 backend tests passed; Django system/migration checks and the production frontend build passed. Chrome checks covered admin/operator workflows, searchable location lookup with automatic coordinates, and mobile layout. Real Open-Meteo forecasts and NASA POWER historical data each produced 24-hour plans. The three demo baseline solves took approximately 0.2–1.0 seconds, and the portfolio pack completed 18 scenario runs. These are local measurements, not a guarantee for arbitrary configurations or hardware.
+Latest verification: 68 backend tests passed, including the original suite and live-simulation, forecasting and WebSocket permission tests. Django system/migration checks and the production frontend build passed. Chrome acceptance checks covered the live stream, synthetic ML training, dataset download, approved-command verification, events, strategy comparison, evidence export and mobile layout. Synthetic backtest results are demonstration evidence, not measured field forecast accuracy. See `LIVE_WALKTHROUGH.md` for reproducible steps and operational limitations.
 
 ```sh
 cd backend
@@ -174,8 +247,8 @@ It exercises admin login, optimization, review, simulation, wizard creation, rea
 
 ## Structure and API
 
-`backend/grid/optimizer.py` is a pure solver accepting a frozen input snapshot. Weather and PV modelling prepare that input; Django persists output. Scenario runs use the same solver with a copied snapshot and scoped overrides. `backend/grid/models.py` contains explicit ORM entities; equipment fields live in validated JSON objects. `frontend/src/main.jsx` contains the React views and charts.
+`backend/grid/optimizer.py` is a pure solver accepting a frozen input snapshot. Weather and PV modelling prepare that input; Django persists output. Scenario runs and Live Control replans use the same optimizer. `backend/grid/live.py` contains the software plant and supervisory loop; `backend/grid/forecasting.py` contains model training, evaluation, eligibility and inference. `backend/grid/models.py` contains the ORM entities. `frontend/src/main.jsx` contains the main views, while `frontend/src/LiveControl.jsx` contains the live workspace.
 
 API routes follow the plan without trailing slashes. Additional endpoints: `/api/auth/refresh`, `/api/auth/logout`, `/api/members`, `/api/defaults`, `/api/locations/search`, and `GET /api/optimization-runs` with optional `site_id` or `kind=scenario`. A baseline run returns status, explanatory action, metrics, intervals, version, source metadata, review trail and snapshot. Scenario responses add baseline metrics, overrides and deltas. All site/run lookups are scoped to organization and assignment.
 
-SQLite is intended for the local demo. Move to PostgreSQL and a job queue for concurrent multi-user deployment; the Django ORM and migrations preserve that path. Before deploying, provide a real `DJANGO_SECRET_KEY`, set `DJANGO_DEBUG=0`, configure allowed hosts, TLS, credential management and remove demo account defaults. No external deployment is performed by this project.
+SQLite is intended for the local demo. Move to PostgreSQL and a production worker/streaming architecture for concurrent sites; the Django ORM and migrations preserve that path. Before deployment, provide a real `DJANGO_SECRET_KEY`, set `DJANGO_DEBUG=0`, configure allowed hosts, TLS, credential management and remove demo account defaults.

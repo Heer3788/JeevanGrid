@@ -36,6 +36,8 @@ def validate_site(data):
 def validate_configuration(data):
     if not isinstance(data, dict) or set(data) != set(DEFAULTS): fail('Provide solar, wind, battery, generator, policy, demand and flexible_loads.')
     c = deepcopy(data)
+    for key in ['min_up_hours', 'min_down_hours', 'ramp_kw_per_hour']:
+        c['generator'].setdefault(key, DEFAULTS['generator'][key])
     for section in ['solar', 'wind', 'battery', 'generator', 'policy', 'demand']:
         if not isinstance(c[section], dict) or set(c[section]) != set(DEFAULTS[section]): fail(f'{section}: fields do not match the configuration template.')
         for key, val in c[section].items():
@@ -54,6 +56,9 @@ def validate_configuration(data):
     number(b['lifetime_throughput_kwh'], 'battery lifetime throughput', .01)
     for name in ['charge_efficiency','discharge_efficiency']: number(b[name], name, .01, 1)
     if g['min_power_kw'] > g['capacity_kw']: fail('Generator minimum exceeds rated power.')
+    for key in ['min_up_hours', 'min_down_hours']:
+        if type(g[key]) is not int or not 1 <= g[key] <= 24: fail(f'{key} must be an integer from 1 to 24.')
+    number(g['ramp_kw_per_hour'], 'Generator ramp kW/hour', .01)
     for name in ['critical_target_pct','renewable_target_pct']: number(p[name], name, 0, 100)
     if type(p['max_starts']) is not int or not 0 <= p['max_starts'] <= 24: fail('Maximum starts must be an integer from 0 to 24.')
     number(d['daily_kwh'], 'daily energy', .01)
