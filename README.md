@@ -1,6 +1,6 @@
 # JeevanGrid
 
-A local React + Django application for planning and stress-testing rural microgrid operation. Every displayed operating plan is produced by PuLP/HiGHS. No ML or equipment control is included.
+A local React + Django application for planning and stress-testing rural microgrid operation. Recommended plans are produced by PuLP/HiGHS; an independent, deterministic reactive controller provides an explicitly labelled comparison. No ML or equipment control is included.
 
 ## Quick start
 
@@ -59,6 +59,50 @@ The operator is assigned the reference and compact sites only. Set `JEEVANGRID_D
 - Multi-site reliability table, 2–5 site comparison, normalized costs, critical-energy weighted cohorts and sequential portfolio resilience packs.
 - Desktop and mobile layouts, visible provenance, projected metric labels, stale-data and infeasible-plan states.
 
+## Renewable energy intelligence workspace
+
+- **Portfolio:** offline interactive geography, grouped markers for shared coordinates, a site inspector, clear reliability labels, and normalized site comparison.
+- **Operating plan:** an operator decision card, recorded SOC/fuel state, an expandable schedule explanation, and direct access to plan review or impact analysis.
+- **Hourly exploration:** linked dispatch/SOC charts with safety and reserve lines, shortage bars, a time-range brush, an hour selector, and a source-to-demand energy flow. The compact mobile view retains all source and destination values.
+- **Dataset Explorer:** inspect the exact demand, weather, available generation, dispatch and source labels captured for a run. Filter missing weather or supply shortages. Export all columns for the selected hours as a UTF-8 CSV readable in Excel on Windows.
+- **Impact analysis:** compare optimized and reactive operation for the same saved inputs. View fuel, cost, emissions, service, generator starts, ending SOC and shifted flexible energy. Negative differences mean optimized minus reactive, not automatically a saving.
+- **What if?:** a six-scenario resilience matrix linked to one baseline, alongside custom experiments. Only runs with the exact preset overrides fill the preset matrix; custom variants remain in history. Runs execute sequentially.
+- **Data & assumptions:** readable equipment cards, source age, configuration version, missing-weather checks and manual-reading timestamps. Raw JSON remains available under developer details. Historical runs also expose their own Dataset Explorer and Impact analysis.
+
+The comparison controller uses current-hour renewables, then storage down to the configured operating reserve, then diesel. Flexible tasks run at the earliest possible allowed hour; unfinished work is retried within its window. Fuel availability, start limits, generator minimum loading, allowed hours, battery power and efficiency are enforced. It has no weather look-ahead or hard terminal SOC constraint. This is an illustrative policy, not an assertion about how an actual operator behaves.
+
+Cost differences are flagged as not like-for-like when critical/normal/flexible service differs (tolerance 0.001 kWh), terminal SOC differs (0.1 percentage points), or the reactive terminal reserve is missed. Ending storage is shown explicitly; no lifecycle-cost, measured-saving or physical-uptime claim is made. Explanations report observations in the saved solution and configured priorities; they do not claim a causal sensitivity analysis. Analysis is read-only and uses the stored snapshot, with controller version `reactive-v1` included in the response.
+
+The map uses [Leaflet](https://leafletjs.com/) and bundled [Natural Earth public-domain land outlines](https://www.naturalearthdata.com/about/terms-of-use/), sourced from `ne_110m_land.geojson` in the Natural Earth vector repository, subset to the surrounding region and rounded to 3 decimal places. It makes no tile-service requests. Coastlines are for regional orientation, without administrative boundaries; this map is not suitable for navigation or precise surveying.
+
+New authenticated, site-scoped endpoints:
+
+```text
+GET /api/optimization-runs/{id}/analysis
+GET /api/optimization-runs/{id}/scenarios
+```
+
+ML remains deferred until issued forecasts can be checked against later observations. Regional historical weather alone is not site generation telemetry or proof of forecast accuracy.
+
+### Django database administration
+
+The database remains `backend/db.sqlite3`. To browse its records through Django Admin:
+
+```sh
+.venv/bin/python backend/manage.py createsuperuser
+```
+
+Open `http://127.0.0.1:8000/admin/` while the backend is running. A JeevanGrid application admin role does not automatically grant Django superuser access. Django Admin edits bypass the product's configuration validation and versioning; use it for inspection, and use the JeevanGrid forms for operational changes. Do not edit saved run snapshots or dispatch records.
+
+### Checking these workflows
+
+```sh
+.venv/bin/python -m pytest backend/grid/tests -c backend/pytest.ini
+.venv/bin/python verify_intelligence.py
+```
+
+The intelligence browser check uses the existing compact demo site (ID 2), creates one optimization and six stress-test records, checks CSV content and mobile layout, and saves screenshots under ignored `test-results/`. It does not modify equipment configuration. Backend coverage includes reactive energy balance across varied resources, hand-calculated fuel costs, service/storage comparison warnings, immutable snapshot use, and access restrictions.
+
 ## Demo data and real weather
 
 The reference site uses approximate Leporiang coordinates, `27.2297, 93.3412`. The [2017 original study](https://ietresearch.onlinelibrary.wiley.com/doi/10.1049/joe.2017.0447) reports survey-estimated demand of **876.41 kWh/day**, **101 kW peak** and modelled PSC capacities of **600 kW PV, 100 kW wind, 200 kW generator, 400 kW converter and 3,000 kWh batteries**. These are research inputs/results, not verified present-day plant telemetry.
@@ -105,11 +149,11 @@ Forecasts have a six-hour freshness gate. Manual readings include age/provenance
 
 ## Verification
 
-Verified on this laptop: 37 backend tests passed; Django system/migration checks and the production frontend build passed. Chrome checks covered admin/operator workflows, searchable location lookup with automatic coordinates, and mobile layout. Real Open-Meteo forecasts and NASA POWER historical data each produced 24-hour plans. The three demo baseline solves took approximately 0.2–1.0 seconds, and the portfolio pack completed 18 scenario runs. These are local measurements, not a guarantee for arbitrary configurations or hardware.
+Verified on this laptop: 57 backend tests passed; Django system/migration checks and the production frontend build passed. Chrome checks covered admin/operator workflows, searchable location lookup with automatic coordinates, and mobile layout. Real Open-Meteo forecasts and NASA POWER historical data each produced 24-hour plans. The three demo baseline solves took approximately 0.2–1.0 seconds, and the portfolio pack completed 18 scenario runs. These are local measurements, not a guarantee for arbitrary configurations or hardware.
 
 ```sh
 cd backend
-../.venv/bin/pytest -q
+../.venv/bin/python -m pytest -q
 ../.venv/bin/python manage.py check
 ../.venv/bin/python manage.py makemigrations --check --dry-run
 cd ../frontend

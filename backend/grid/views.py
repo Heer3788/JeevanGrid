@@ -249,6 +249,18 @@ def run_detail(request, pk): return Response(svc.run_summary(run_for(request.use
 
 
 @api_view(['GET'])
+def run_analysis(request, pk):
+    from .intelligence import analyze_run
+    return Response(analyze_run(run_for(request.user, pk)))
+
+
+@api_view(['GET'])
+def run_scenarios(request, pk):
+    run = run_for(request.user, pk)
+    return Response([svc.run_summary(s.result) for s in run.scenarios.select_related('result', 'result__site').order_by('-result_id')])
+
+
+@api_view(['GET'])
 def run_list(request):
     q=m.OptimizationRun.objects.filter(site__in=sites_for(request.user)).select_related('site')
     if request.query_params.get('site_id'): q=q.filter(site_id=request.query_params['site_id'])

@@ -5,6 +5,8 @@ from grid import views as v
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    path('api/optimization-runs/<int:pk>/analysis', v.run_analysis),
+    path('api/optimization-runs/<int:pk>/scenarios', v.run_scenarios),
     path('api/auth/login',v.login), path('api/auth/me',v.me), path('api/auth/logout',v.logout),
     path('api/auth/refresh',TokenRefreshView.as_view()), path('api/members',v.members), path('api/defaults',v.defaults),
     path('api/locations/search',v.location_search),
