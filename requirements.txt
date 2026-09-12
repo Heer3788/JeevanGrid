@@ -1,0 +1,10 @@
+Django>=5.2,<5.3
+djangorestframework>=3.16,<4
+djangorestframework-simplejwt>=5.5,<6
+pandas>=2.2,<4
+pvlib>=0.13,<0.16
+PuLP>=3.3,<4
+highspy>=1.12,<2
+requests>=2.32,<3
+pytest>=8,<10
+pytest-django>=4.11,<5
