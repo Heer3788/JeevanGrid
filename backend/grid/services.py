@@ -47,9 +47,9 @@ def current_state(site, c):
     return base
 
 
-def prepare_snapshot(site, mode, date=None):
+def prepare_snapshot(site, mode, date=None, persist_weather=True):
     c = configuration(site)
-    weather = get_weather(site, mode, date)
+    weather = get_weather(site, mode, date, persist=persist_weather)
     state = current_state(site, c)
     d = c['demand']
     shape = daily_shape(d['daily_kwh'], d['peak_kw'])
@@ -70,7 +70,9 @@ def prepare_snapshot(site, mode, date=None):
     return {'site': {'id': site.id, 'name': site.name, 'latitude': site.latitude, 'longitude': site.longitude, 'timezone': site.timezone},
             'configuration': c, 'configuration_version': site.configuration_version, 'state': state,
             'weather': weather, 'inputs': inputs, 'demand_source': site.load_profile.provenance,
-            'demand_note': 'CSV reused as a local-hour daily template.' if uploaded else 'Deterministic demand shape; totals informed by study, intervals simulated.',
+            'demand_note': ('CSV reused as a local-hour daily template.' if site.load_profile.provenance == 'csv'
+                            else 'Modelled appliance-based hourly template; see site inventory and assumptions.') if uploaded
+                           else 'Deterministic demand shape; totals informed by study, intervals simulated.',
             'provenance': site.provenance}
 
 
@@ -80,6 +82,8 @@ def persist_run(site, user, mode, snapshot, result):
         configuration_version=snapshot['configuration_version'], snapshot=snapshot, status=result['status'],
         metrics=result['metrics'], next_action=result['next_action'], diagnostics=result['diagnostics'], solve_seconds=result['solve_seconds'])
     m.DispatchInterval.objects.bulk_create([m.DispatchInterval(run=run, timestamp=d['timestamp'], data=d) for d in result['intervals']])
+    if mode not in ['scenario', 'live_simulation'] and result['status'] in ['optimal', 'feasible']:
+        m.PlanAssessment.objects.create(run=run)
     return run
 
 
@@ -123,8 +127,12 @@ def run_summary(run, details=False):
     return data
 
 
+def latest_plan(site):
+    return site.runs.exclude(mode__in=['scenario', 'live_simulation']).first() or site.runs.exclude(mode='scenario').first()
+
+
 def site_summary(site):
-    run = site.runs.exclude(mode='scenario').first()
+    run = latest_plan(site)
     return {'id': site.pk, 'name': site.name, 'state': site.state, 'district': site.district,
             'latitude': site.latitude, 'longitude': site.longitude, 'timezone': site.timezone,
             'archived': site.archived, 'configuration_version': site.configuration_version,
@@ -134,7 +142,8 @@ def site_summary(site):
 
 
 def reliability(site):
-    baseline = site.runs.exclude(mode='scenario').first()
+    from .assessment import preset_results
+    baseline = latest_plan(site)
     data = site_summary(site)
     data.update({'reliability_status': 'red', 'assessment': 'No plan available', 'stress_tested': False, 'inputs_current': False})
     if not baseline: return data
@@ -148,12 +157,15 @@ def reliability(site):
     if baseline.status not in ['optimal','feasible'] or baseline.metrics.get('critical_unserved_kwh', 1) > .001:
         data['assessment'] = 'Critical shortage or no feasible baseline.'
         return data
-    scenarios = list(baseline.scenarios.select_related('result').all())
-    data['stress_tested'] = len(scenarios) > 0
+    scenarios = list(preset_results(baseline).values())
+    assessment = m.PlanAssessment.objects.filter(run=baseline).first()
+    data['assessment_state'] = assessment.status if assessment else 'not_started'
+    data['assessment_error'] = assessment.error if assessment else ''
+    data['stress_tested'] = len(scenarios) == 6
     risk = baseline.metrics.get('reserve_compliance_pct', 0) < 100
     risk |= any(x.result.status not in ['optimal','feasible'] or x.result.metrics.get('critical_unserved_kwh',1)>.001
                 or x.result.metrics.get('reserve_compliance_pct',0)<100 for x in scenarios)
-    data['reliability_status'] = 'amber' if risk or not scenarios else 'green'
-    data['assessment'] = 'Reserve/stress scenario risk.' if risk else 'Baseline ready; resilience pack not yet assessed.' if not scenarios else 'Baseline and assessed scenarios preserve critical supply and reserve.'
+    data['reliability_status'] = 'amber' if risk or not data['stress_tested'] else 'green'
+    data['assessment'] = 'Reserve/stress scenario risk.' if risk else 'Automatic checks pending or incomplete.' if not data['stress_tested'] else 'Baseline and six standard checks preserve critical supply and reserve.'
     data['scenario_count'] = len(scenarios)
     return data

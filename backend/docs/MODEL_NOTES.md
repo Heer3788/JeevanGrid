@@ -48,62 +48,9 @@ The repository also contains a software microgrid simulator. It streams clearly 
 
 The detailed feature test is in [LIVE_WALKTHROUGH.md](LIVE_WALKTHROUGH.md).
 
-## Quick start
+## Setup and dashboard
 
-Requirements: Python 3.12+ and Node.js 22.12+ (Node 24 recommended). SQLite is included with Python. Run commands from this directory.
-
-Linux / macOS:
-
-```sh
-python3 -m venv .venv
-.venv/bin/python -m pip install -r requirements.txt
-.venv/bin/python backend/manage.py migrate
-.venv/bin/python backend/manage.py seed_demo --with-runs
-cd frontend
-npm ci
-cd ..
-python3 dev.py
-```
-
-Windows PowerShell:
-
-```powershell
-py -3 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe backend\manage.py migrate
-.\.venv\Scripts\python.exe backend\manage.py seed_demo --with-runs
-cd frontend
-npm ci
-cd ..
-py dev.py
-```
-
-Open **http://127.0.0.1:5173**. The ASGI API/WebSocket server listens on port 8000, the simulation worker advances active digital twins, and Vite serves the frontend and proxies `/api` and `/ws`. All services bind locally. `Ctrl+C` stops the launcher. The launcher checks ports 8000 and 5173 before starting, so it will not leave a partial duplicate instance running.
-
-Demo accounts:
-
-| Role | Email | Default password |
-| --- | --- | --- |
-| Admin | admin@jeevangrid.local | JeevanGridDemo!26 |
-| Operator | operator@jeevangrid.local | JeevanGridDemo!26 |
-
-The operator is assigned the reference and compact sites only. Set `JEEVANGRID_DEMO_PASSWORD` before first seeding to choose another password. Seeding is idempotent and does not reset existing accounts or overwrite sites. This is a local demo, not a production deployment.
-
-## Included workflows
-
-- Organization-scoped admin/operator permissions enforced by Django and JWT login/refresh/logout.
-- Site creation, five-step configuration, operator assignment, archival and restoration.
-- Searchable Indian state/union-territory and locality fields. A prefix such as `Ahm` suggests Ahmedabad and automatically fills the best match's WGS84 coordinates, district and timezone through Open-Meteo geocoding. Alternative matches can be selected and coordinates remain editable.
-- Profiles for solar, wind, battery, generator, demand, flexible tasks and operating policies.
-- Manual SOC, fuel, generator status, price and event readings; new readings invalidate prior plans for approval.
-- Validated 24-hour interval CSV import. Imported intervals become a repeating local-hour demand template.
-- Explicit simulated, Open-Meteo forecast and NASA POWER historical modes. API failures never silently switch to simulated data.
-- Deterministic solar modelling with pvlib, wind height adjustment/power curve, and battery losses.
-- 24-hour mixed-integer dispatch including generator starts/fuel availability, SOC limits, terminal reserve, allowed generator hours, flexible task windows and renewable target shortfall.
-- Six scenario presets plus custom resource/demand/price/SOC sliders and configurable outage hours.
-- Baseline-versus-scenario comparisons, immutable input snapshots, plan history, JSON export and confirm/override trail.
-- Multi-site reliability table, 2–5 site comparison, normalized costs, critical-energy weighted cohorts and sequential portfolio resilience packs.
-- Desktop and mobile layouts, visible provenance, projected metric labels, stale-data and infeasible-plan states.
+See [backend setup](../README.md), the [current walkthrough](LIVE_WALKTHROUGH.md), and [seed data sources](SEED_DATA.md). All application code, documentation and development tools are under `frontend/` or `backend/`.
 
 ## How the current system works
 
@@ -129,52 +76,13 @@ New simulated telemetry or disruption triggers rolling replanning
 
 Open-Meteo supplies weather forecasts; JeevanGrid does not use ML to predict weather. XGBoost estimates demand and can correct the error around the physics-based solar estimate. The optimizer then selects the energy mix while enforcing equipment limits and accounting for fuel price, generator starts, battery wear and diesel emissions.
 
-## Renewable energy intelligence workspace
+## Workspace and data inspection
 
-- **Portfolio:** offline interactive geography, grouped markers for shared coordinates, a site inspector, clear reliability labels, and normalized site comparison.
-- **Operating plan:** an operator decision card, recorded SOC/fuel state, an expandable schedule explanation, and direct access to plan review or impact analysis.
-- **Hourly exploration:** linked dispatch/SOC charts with safety and reserve lines, shortage bars, a time-range brush, an hour selector, and a source-to-demand energy flow. The compact mobile view retains all source and destination values.
-- **Dataset Explorer:** inspect the exact demand, weather, available generation, dispatch and source labels captured for a run. Filter missing weather or supply shortages. Export all columns for the selected hours as a UTF-8 CSV readable in Excel on Windows.
-- **Impact analysis:** compare optimized and reactive operation for the same saved inputs. View fuel, cost, emissions, service, generator starts, ending SOC and shifted flexible energy. Negative differences mean optimized minus reactive, not automatically a saving.
-- **What if?:** a six-scenario resilience matrix linked to one baseline, alongside custom experiments. Only runs with the exact preset overrides fill the preset matrix; custom variants remain in history. Runs execute sequentially.
-- **Data & assumptions:** readable equipment cards, source age, configuration version, missing-weather checks and manual-reading timestamps. Raw JSON remains available under developer details. Historical runs also expose their own Dataset Explorer and Impact analysis.
-- **Live Control:** simulated solar, wind, demand, SOC, fuel and generator output; WebSocket updates; automatic five-minute rolling plans; disruption buttons; command review and verification; strategy comparison; ML backtest results; evidence export.
+The site workflow has Plan and Test plan views. Source selection is applied by generating a new plan; every saved result retains its original input snapshot. Standard resilience checks run automatically through the Python worker.
 
-The comparison controller uses current-hour renewables, then storage down to the configured operating reserve, then diesel. Flexible tasks run at the earliest possible allowed hour; unfinished work is retried within its window. Fuel availability, start limits, generator minimum loading, allowed hours, battery power and efficiency are enforced. It has no weather look-ahead or hard terminal SOC constraint. This is an illustrative policy, not an assertion about how an actual operator behaves.
+Dataset Explorer, demand import and model datasets are accessible from the sidebar. Historical rows and exports are derived from saved snapshots.
 
-Cost differences are flagged as not like-for-like when critical/normal/flexible service differs (tolerance 0.001 kWh), terminal SOC differs (0.1 percentage points), or the reactive terminal reserve is missed. Ending storage is shown explicitly; no lifecycle-cost, measured-saving or physical-uptime claim is made. Explanations report observations in the saved solution and configured priorities; they do not claim a causal sensitivity analysis. Analysis is read-only and uses the stored snapshot, with controller version `reactive-v1` included in the response.
-
-The map uses [Leaflet](https://leafletjs.com/) and bundled [Natural Earth public-domain land outlines](https://www.naturalearthdata.com/about/terms-of-use/), sourced from `ne_110m_land.geojson` in the Natural Earth vector repository, subset to the surrounding region and rounded to 3 decimal places. It makes no tile-service requests. Coastlines are for regional orientation, without administrative boundaries; this map is not suitable for navigation or precise surveying.
-
-New authenticated, site-scoped endpoints:
-
-```text
-GET /api/optimization-runs/{id}/analysis
-GET /api/optimization-runs/{id}/scenarios
-```
-
-The Live Control workspace includes demand forecasting and solar residual correction. Demo training uses explicitly simulated observations. Uploaded hourly data is also supported. Training, calibration and evaluation use disjoint chronological periods; models must beat the baseline on calibration before selection. Regional historical weather alone is not site generation telemetry or proof of operational forecast accuracy. Synthetic model versions cannot influence API-weather runs.
-
-The live loop is a software demonstration with an hourly optimization model. Five-minute replanning means the optimizer re-evaluates that 24-hour hourly schedule using the latest simulated SOC, fuel, generator state, remaining flexible work and event conditions. It does not imply millisecond electrical control.
-
-### Django database administration
-
-The database remains `backend/db.sqlite3`. To browse its records through Django Admin:
-
-```sh
-.venv/bin/python backend/manage.py createsuperuser
-```
-
-Open `http://127.0.0.1:8000/admin/` while the backend is running. A JeevanGrid application admin role does not automatically grant Django superuser access. Django Admin edits bypass the product's configuration validation and versioning; use it for inspection, and use the JeevanGrid forms for operational changes. Do not edit saved run snapshots or dispatch records.
-
-### Checking these workflows
-
-```sh
-.venv/bin/python -m pytest backend/grid/tests -c backend/pytest.ini
-.venv/bin/python verify_intelligence.py
-```
-
-The intelligence browser check uses the existing compact demo site (ID 2), creates one optimization and six stress-test records, checks CSV content and mobile layout, and saves screenshots under ignored `test-results/`. It does not modify equipment configuration. Backend coverage includes reactive energy balance across varied resources, hand-calculated fuel costs, service/storage comparison warnings, immutable snapshot use, and access restrictions.
+Django database administration remains available at `http://127.0.0.1:8000/admin/`; create a Django superuser with `backend/.venv/bin/python backend/manage.py createsuperuser`. An application admin role does not grant Django superuser access. Operational edits should use application forms so validation and versioning remain enforced.
 
 ## Demo data and real weather
 
@@ -185,7 +93,7 @@ The generated reference load totals exactly 876.41 kWh with an 18:00 hourly peak
 Fetch real historical weather for the reference site (site ID 1 on a fresh database):
 
 ```sh
-.venv/bin/python backend/manage.py fetch_history --site 1 --date 2025-01-15
+backend/.venv/bin/python backend/manage.py fetch_history --site 1 --date 2025-01-15
 ```
 
 The UI's Historical mode also fetches and caches data automatically. A day of NASA POWER data was retrieved during implementation and is cached in this workspace database. A fresh install can retrieve it with the command above. NASA supplies regional satellite/reanalysis weather, not site electrical readings. The [NASA hourly API](https://power.larc.nasa.gov/docs/services/api/temporal/hourly/) is queried in UTC; hourly irradiance is interpreted as W/m². Historical replay uses realized weather and must not be interpreted as a forecast accuracy test.
@@ -218,36 +126,17 @@ Renewable share means used solar+wind divided by used solar+wind+diesel generati
 
 Reliability is projected energy adequacy over hourly intervals, not measured uptime or a probabilistic outage guarantee. Base critical shortages, stale forecasts or changed configurations are red. An unassessed resilience pack or reserve risk is amber; green requires evaluated scenarios with critical service and operating reserve preserved. Portfolio cohorts only combine identical modes and horizon starts; costs and fuel are normalized by served energy. Zero denominators appear as unavailable.
 
-Forecasts have a six-hour freshness gate. Readings in the ordinary Site readings tab are manual operator inputs. Live Control uses continuous simulated telemetry from the digital twin. Confirmation records human review of an advisory plan; Live Control approval applies a command only to the simulated plant. Changed, expired or superseded commands cannot execute.
+Forecasts have a six-hour freshness gate. Readings in Update readings are manual operator inputs. Live Control uses continuous simulated telemetry from the digital twin. Confirmation records human review of an advisory plan; Live Control approval applies a command only to the simulated plant. Changed, expired or superseded commands cannot execute.
 
 ## Verification
 
-Latest verification: 68 backend tests passed, including the original suite and live-simulation, forecasting and WebSocket permission tests. Django system/migration checks and the production frontend build passed. Chrome acceptance checks covered the live stream, synthetic ML training, dataset download, approved-command verification, events, strategy comparison, evidence export and mobile layout. Synthetic backtest results are demonstration evidence, not measured field forecast accuracy. See `LIVE_WALKTHROUGH.md` for reproducible steps and operational limitations.
+Backend physics, authorization, import, weather, forecasting, live lifecycle and automatic assessment checks are in `backend/grid/tests`. The current browser acceptance script is `frontend/tests/verify_workspace.py`; see the walkthrough for its scope and setup.
 
-```sh
-cd backend
-../.venv/bin/python -m pytest -q
-../.venv/bin/python manage.py check
-../.venv/bin/python manage.py makemigrations --check --dry-run
-cd ../frontend
-npm run build
-```
-
-The browser smoke test needs both services running, Playwright (`pip install playwright`) and Chrome. Set `CHROME_PATH` for your OS if needed; default is Linux Chrome at `/opt/google/chrome/chrome`.
-
-`requirements-tested.txt` records the exact Python versions used during verification; `frontend/package-lock.json` locks the Node dependencies.
-
-```sh
-.venv/bin/python browser_check.py
-```
-
-It exercises admin login, optimization, review, simulation, wizard creation, readings, archival, resilience assessment and operator mobile access. It creates and archives one clearly named test site. Screenshots are under `test-results/` and ignored by git.
-
-`verify_demo.py` additionally checks the compiled frontend at port 4173 and both live weather integrations. Start it with `npm run preview -- --host 127.0.0.1` from `frontend` after building, while the Django backend is running. The verification script creates new baseline/scenario history for the three seeded sites and writes `test-results/verification.json`.
+`backend/requirements-tested.txt` records the Python verification environment and `frontend/package-lock.json` locks frontend packages.
 
 ## Structure and API
 
-`backend/grid/optimizer.py` is a pure solver accepting a frozen input snapshot. Weather and PV modelling prepare that input; Django persists output. Scenario runs and Live Control replans use the same optimizer. `backend/grid/live.py` contains the software plant and supervisory loop; `backend/grid/forecasting.py` contains model training, evaluation, eligibility and inference. `backend/grid/models.py` contains the ORM entities. `frontend/src/main.jsx` contains the main views, while `frontend/src/LiveControl.jsx` contains the live workspace.
+`backend/grid/optimizer.py` is a pure solver accepting a frozen input snapshot. Weather and PV modelling prepare that input; Django persists output. Scenario runs and Live Control replans use the same optimizer. `backend/grid/live.py` contains the software plant and supervisory loop; `backend/grid/forecasting.py` contains model training, evaluation, eligibility and inference. `backend/grid/models.py` contains the ORM entities. `frontend/src/main.jsx` contains the app shell and site configuration. Separate React modules contain Portfolio, SiteWorkspace, PlanTesting, PlanCharts, DataWorkspace and LiveControl.
 
 API routes follow the plan without trailing slashes. Additional endpoints: `/api/auth/refresh`, `/api/auth/logout`, `/api/members`, `/api/defaults`, `/api/locations/search`, and `GET /api/optimization-runs` with optional `site_id` or `kind=scenario`. A baseline run returns status, explanatory action, metrics, intervals, version, source metadata, review trail and snapshot. Scenario responses add baseline metrics, overrides and deltas. All site/run lookups are scoped to organization and assignment.
 

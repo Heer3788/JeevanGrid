@@ -6,7 +6,7 @@ from django.db import transaction
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from . import live, models as m, services as svc, forecasting
-from .views import site_for, admin
+from .views import site_for, admin, run_for
 from .validation import fail
 
 
@@ -15,13 +15,12 @@ def session(request,pk):
     site=site_for(request.user,pk,writable=request.method=='POST')
     if request.method=='POST':
         action=request.data.get('action','start')
-        if action=='start': live.start(site,request.user,request.data.get('options',{}))
+        if action=='start':
+            baseline = run_for(request.user, request.data['baseline_id']) if request.data.get('baseline_id') else None
+            live.start(site,request.user,request.data.get('options',{}),baseline=baseline)
         elif action=='pause':
-            with transaction.atomic():
-                current=get_object_or_404(m.LiveSession,site=site,active=True)
-                current.active=False;live.event(current,'Operator paused simulation. No further commands will execute.')
-                current.save(update_fields=['active','events'])
-                current.commands.filter(status__in=['proposed','approved','executing']).update(status='superseded')
+            from .operations import pause_replay
+            pause_replay(request.user, pk)
         else:fail('Choose start or pause.')
     return Response(live.status(site))
 

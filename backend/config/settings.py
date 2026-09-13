@@ -3,6 +3,12 @@ from datetime import timedelta
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+from dotenv import load_dotenv
+load_dotenv(BASE_DIR / '.env', override=False)
+ASSISTANT_ENABLED = os.environ.get('ASSISTANT_ENABLED', '1' if os.environ.get('DJANGO_DEBUG', '1') == '1' else '0') == '1'
+GROQ_API_KEY = os.environ.get('GROQ_API_KEY', '')
+ASSISTANT_MODEL = os.environ.get('ASSISTANT_MODEL', 'openai/gpt-oss-120b')
+ASSISTANT_WORKFLOWS = os.environ.get('ASSISTANT_WORKFLOWS', '*').split(',')
 SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'local-demo-only-jeevangrid-change-before-deployment-2026')
 DEBUG = os.environ.get('DJANGO_DEBUG', '1') == '1'
 if not DEBUG and SECRET_KEY.startswith('local-demo'):
@@ -29,7 +35,7 @@ TEMPLATES = [{
         ],
     },
 }]
-DATABASES = {'default': {'ENGINE': 'django.db.backends.sqlite3', 'NAME': BASE_DIR / 'db.sqlite3', 'OPTIONS': {'timeout': 20}}}
+DATABASES = {'default': {'ENGINE': 'django.db.backends.sqlite3', 'NAME': BASE_DIR / 'db.sqlite3', 'OPTIONS': {'timeout': 20, 'transaction_mode': 'IMMEDIATE'}}}
 USE_TZ = True
 TIME_ZONE = 'Asia/Kolkata'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'

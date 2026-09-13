@@ -5,6 +5,7 @@ from copy import deepcopy
 import pandas as pd
 import requests
 from django.contrib.auth import authenticate, get_user_model
+from django.conf import settings
 from django.db import transaction
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -14,7 +15,7 @@ from rest_framework.response import Response
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.throttling import AnonRateThrottle
 from rest_framework_simplejwt.tokens import RefreshToken
-from . import models as m, services as svc
+from . import models as m, services as svc, operations
 from .defaults import default_configuration
 from .validation import fail, validate_site, validate_reading, PRESETS
 from .weather import get_weather
@@ -24,25 +25,7 @@ class LoginThrottle(AnonRateThrottle):
     rate = '20/min'
 
 
-def role(user):
-    try: return user.grid_role
-    except m.UserRole.DoesNotExist: raise PermissionDenied('No JeevanGrid role assigned.')
-
-
-def admin(user):
-    if role(user).role != 'admin': raise PermissionDenied('Admin access required.')
-
-
-def sites_for(user):
-    r = role(user)
-    q = m.Site.objects.filter(organization=r.organization)
-    return q if r.role == 'admin' else q.filter(assignments__user=user).distinct()
-
-
-def site_for(user, pk, writable=False):
-    site = get_object_or_404(sites_for(user), pk=pk)
-    if writable and site.archived: fail('This site is archived. Restore it before running or editing it.')
-    return site
+from .access import role, admin, sites_for, site_for, run_for
 
 
 def account(user):
@@ -61,6 +44,27 @@ def login(request):
     data = account(user)
     refresh = RefreshToken.for_user(user)
     return Response({'access': str(refresh.access_token), 'refresh': str(refresh), 'user': data})
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def demo_accounts(request):
+    from .demo import ACCOUNTS, DEMO_PASSWORD
+    if not settings.DEBUG:
+        return Response([])
+    result = []
+    for account in ACCOUNTS:
+        user = get_user_model().objects.filter(username=account['email'], is_active=True).first()
+        if user and m.UserRole.objects.filter(user=user).exists():
+            result.append({**account, 'quick_login': user.check_password(DEMO_PASSWORD)})
+    return Response(result)
+
+
+@api_view(['GET'])
+def team(request):
+    admin(request.user)
+    accounts=m.UserRole.objects.filter(organization=role(request.user).organization).select_related('user')
+    return Response([{**account(r.user), 'sites':list(sites_for(request.user).filter(assignments__user=r.user).values('id','name'))} for r in accounts])
 
 
 @api_view(['GET'])
@@ -86,63 +90,18 @@ def defaults(request): return Response(default_configuration())
 
 @api_view(['GET'])
 def location_search(request):
-    """Resolve an Indian place name without exposing the browser to a third-party API."""
-    query = request.query_params.get('q', '').strip()
-    state = request.query_params.get('state', '').strip()
-    if len(query) < 3: fail('Enter at least three characters of a village, town or district.')
-    if len(state) > 100: fail('State or union territory must be at most 100 characters.')
-    try:
-        response = requests.get(
-            'https://geocoding-api.open-meteo.com/v1/search',
-            params={'name': query, 'count': 20, 'language': 'en', 'format': 'json', 'countryCode': 'IN'},
-            timeout=10,
-        )
-        response.raise_for_status()
-        raw = response.json().get('results', [])
-    except (requests.RequestException, ValueError, AttributeError):
-        return Response({'detail': 'Location search is temporarily unavailable. You can still enter coordinates manually.'}, status=502)
-    matches = []
-    for item in raw:
-        # Some Indian GeoNames records omit admin1. Keep the operator-selected
-        # state in that case, surface the verification flag, and show district
-        # context so the operator can reject a similarly named place.
-        admin1 = item.get('admin1')
-        if item.get('country_code') != 'IN' or (state and admin1 and admin1.casefold() != state.casefold()):
-            continue
-        if not all(key in item for key in ('name', 'latitude', 'longitude')):
-            continue
-        matches.append({
-            'id': item.get('id'), 'name': item['name'], 'state': admin1 or state,
-            'district': item.get('admin2') or item.get('admin3') or item['name'],
-            'latitude': item['latitude'], 'longitude': item['longitude'],
-            'timezone': item.get('timezone') or 'Asia/Kolkata',
-            'state_verified': bool(admin1),
-            'label': ', '.join(filter(None, [item['name'], item.get('admin2'), admin1 or state])),
-        })
-        if len(matches) == 8: break
-    return Response({'results': matches, 'attribution': 'Open-Meteo geocoding; location data based on GeoNames'})
+    from .locations import search
+    try:return Response(search(request.query_params.get('q',''),request.query_params.get('state','')))
+    except LookupError as e:return Response({'detail':str(e)},status=502)
 
 
-def assign(site, operator_ids):
-    if not isinstance(operator_ids, list) or any(type(i) is not int for i in operator_ids): fail('operator_ids must be a list of integers.')
-    valid = list(m.UserRole.objects.filter(organization=site.organization, role='operator', user_id__in=operator_ids).values_list('user_id', flat=True))
-    if set(valid) != set(operator_ids): fail('Operators must belong to this organization.')
-    site.assignments.all().delete()
-    m.SiteAssignment.objects.bulk_create([m.SiteAssignment(site=site,user_id=i) for i in valid])
+from .operations import assign
 
 
 @api_view(['GET','POST'])
 def sites(request):
     if request.method == 'GET': return Response([svc.site_summary(s) for s in sites_for(request.user).order_by('id')])
-    admin(request.user)
-    data = dict(request.data); validate_site(data)
-    if not data.get('name'): fail('Site name is required.')
-    config = data.pop('configuration', default_configuration())
-    operators = data.pop('operator_ids', [])
-    with transaction.atomic():
-        site = m.Site.objects.create(organization=role(request.user).organization, **data, provenance={'site': 'operator', 'note': 'User-configured site; template values require verification.'})
-        svc.save_configuration(site, config, increment=False)
-        assign(site, operators)
+    site = operations.save_site(request.user, dict(request.data))
     return Response(svc.site_summary(site), status=201)
 
 
@@ -150,14 +109,7 @@ def sites(request):
 def site_detail(request, pk):
     site = site_for(request.user, pk)
     if request.method == 'PATCH':
-        admin(request.user)
-        data = dict(request.data); validate_site(data)
-        with transaction.atomic():
-            if 'operator_ids' in data: assign(site, data.pop('operator_ids'))
-            if 'configuration' in data: svc.save_configuration(site, data.pop('configuration'), increment=False)
-            for key,val in data.items(): setattr(site,key,val)
-            site.configuration_version += 1
-            site.save()
+        site = operations.save_site(request.user, dict(request.data), pk)
     data = svc.site_summary(site)
     data.update({'configuration': svc.configuration(site), 'current_state': svc.current_state(site, svc.configuration(site)), 'reliability': svc.reliability(site)})
     return Response(data)
@@ -175,56 +127,13 @@ def configuration(request, pk):
 
 @api_view(['POST'])
 def readings(request, pk):
-    site = site_for(request.user, pk, writable=True)
-    c = svc.configuration(site)
-    validate_reading(request.data, c)
-    state = svc.current_state(site,c)
-    state.pop('provenance'); state.pop('timestamp')
-    state.update(request.data)
-    validate_reading(state,c)
-    reading = m.SiteReading.objects.create(site=site, timestamp=timezone.now(), data=state, created_by=request.user)
-    # New state invalidates the current comparison until replanning.
-    site.configuration_version += 1
-    site.save(update_fields=['configuration_version'])
-    return Response({'id':reading.pk, 'state':state, 'timestamp':reading.timestamp}, status=201)
+    reading = operations.record_reading(request.user, pk, dict(request.data))
+    return Response({'id':reading.pk, 'state':reading.data, 'timestamp':reading.timestamp}, status=201)
 
 
 @api_view(['POST'])
 def load_import(request, pk):
-    admin(request.user)
-    site = site_for(request.user,pk,writable=True)
-    file = request.FILES.get('file')
-    if not file or file.size > 1024*1024: fail('Upload a CSV file under 1 MB.')
-    try:
-        reader = csv.DictReader(io.StringIO(file.read().decode('utf-8-sig')))
-        expected = {'timestamp','critical_kw','normal_kw','flexible_kw'}
-        if set(reader.fieldnames or []) != expected: fail('CSV columns must be timestamp,critical_kw,normal_kw,flexible_kw; power is in kW.')
-        rows = list(reader)
-        if len(rows) != 24: fail('Upload exactly 24 consecutive hourly intervals.')
-        stamps = [pd.Timestamp(r['timestamp']) for r in rows]
-        if any(t.tzinfo is None for t in stamps): fail('Each timestamp needs a UTC offset, e.g. +05:30.')
-        stamps = [t.tz_convert('UTC') for t in stamps]
-        if len(set(stamps)) != 24: fail('Duplicate timestamps are not allowed.')
-        for i in range(1,24):
-            if stamps[i]-stamps[i-1] != pd.Timedelta(hours=1): fail('CSV must be sorted with exactly one-hour spacing.')
-        parsed = [{k:float(r[k]) for k in expected-{'timestamp'}} for r in rows]
-        if any(not math.isfinite(v) or v < 0 for r in parsed for v in r.values()): fail('Load values must be finite and non-negative.')
-    except (UnicodeError,ValueError,KeyError,TypeError,csv.Error): fail('Invalid CSV values or timestamps.')
-    c = deepcopy(svc.configuration(site))
-    total = sum(sum(r.values()) for r in parsed)
-    if total <= 0: fail('Daily demand must be greater than zero.')
-    flex = sum(r['flexible_kw'] for r in parsed)
-    c['demand'] = {'daily_kwh':total,'peak_kw':max(sum(r.values()) for r in parsed),
-                   'critical_pct':100*sum(r['critical_kw'] for r in parsed)/total, 'flexible_pct':100*flex/total,'provenance':'csv'}
-    oldflex = sum(f['required_kwh'] for f in c['flexible_loads'])
-    if flex and not oldflex: fail('Configure a flexible load window before uploading a CSV with flexible demand.')
-    for f in c['flexible_loads']: f['required_kwh'] *= flex/oldflex if oldflex else 0
-    with transaction.atomic():
-        svc.save_configuration(site,c)
-        site.load_profile.intervals.all().delete()
-        m.LoadInterval.objects.bulk_create([m.LoadInterval(profile=site.load_profile,timestamp=stamps[i],**r) for i,r in enumerate(parsed)])
-    return Response({'detail':'Imported 24 hourly intervals as a daily local-hour demand template.', 'daily_kwh':total,'provenance':'csv'})
-
+    return Response(operations.import_load(request.user, pk, request.FILES.get('file')))
 
 @api_view(['POST'])
 def forecast_refresh(request, pk):
@@ -240,10 +149,6 @@ def optimization_runs(request, pk):
     return Response(svc.run_summary(run,True),status=201)
 
 
-def run_for(user, pk):
-    return get_object_or_404(m.OptimizationRun.objects.filter(site__in=sites_for(user)),pk=pk)
-
-
 @api_view(['GET'])
 def run_detail(request, pk): return Response(svc.run_summary(run_for(request.user,pk),True))
 
@@ -254,9 +159,18 @@ def run_analysis(request, pk):
     return Response(analyze_run(run_for(request.user, pk)))
 
 
-@api_view(['GET'])
+@api_view(['GET', 'POST'])
 def run_scenarios(request, pk):
     run = run_for(request.user, pk)
+    if request.method == 'POST':
+        site_for(request.user, run.site_id, writable=True)
+        if run.mode == 'scenario' or run.status not in ['optimal', 'feasible']:
+            fail('A feasible original plan is required.')
+        job, created = m.PlanAssessment.objects.get_or_create(run=run)
+        if job.status == 'failed' and request.data.get('retry') is True:
+            job.status, job.error = 'pending', ''
+            job.save(update_fields=['status', 'error', 'updated_at'])
+        return Response({'status': job.status, 'error': job.error}, status=202)
     return Response([svc.run_summary(s.result) for s in run.scenarios.select_related('result', 'result__site').order_by('-result_id')])
 
 
@@ -265,23 +179,13 @@ def run_list(request):
     q=m.OptimizationRun.objects.filter(site__in=sites_for(request.user)).select_related('site')
     if request.query_params.get('site_id'): q=q.filter(site_id=request.query_params['site_id'])
     if request.query_params.get('kind')=='scenario': q=q.filter(mode='scenario')
+    if request.query_params.get('kind')=='plan': q=q.exclude(mode__in=['scenario', 'live_simulation'])
     return Response([svc.run_summary(r) for r in q[:100]])
 
 
 @api_view(['POST'])
 def decision(request, pk):
-    run=run_for(request.user,pk)
-    site_for(request.user,run.site_id,writable=True)
-    if run.mode=='scenario' or run.status not in ['optimal','feasible']: fail('Only feasible baseline plans can be confirmed or overridden.')
-    if run.configuration_version != run.site.configuration_version: fail('Site inputs changed; generate a new plan before approval.')
-    if svc.reliability(run.site)['assessment']=='Forecast is stale; refresh it.': fail('Forecast is stale; refresh and rerun before approval.')
-    if run.id != run.site.runs.exclude(mode='scenario').first().id: fail('This plan has been superseded; review the latest plan.')
-    action=request.data.get('decision'); reason=request.data.get('reason','')
-    if action not in ['confirm','override'] or not isinstance(reason,str) or len(reason)>2000: fail('Enter confirm/override and a reason up to 2000 characters.')
-    if action=='override' and not reason.strip(): fail('An override reason is required.')
-    obj=m.OperatorDecision.objects.create(run=run,user=request.user,decision=action,reason=reason)
-    return Response({'id':obj.id,'decision':action,'reason':reason},status=201)
-
+    return Response(operations.review_plan(request.user, pk, request.data), status=201)
 
 @api_view(['POST'])
 def scenarios(request, pk):
@@ -320,7 +224,7 @@ def resilience(request):
     admin(request.user)
     results=[]
     for site in sites_for(request.user).filter(archived=False).order_by('id'):
-        baseline=site.runs.exclude(mode='scenario').first()
+        baseline=svc.latest_plan(site)
         if not baseline or not svc.reliability(site)['inputs_current'] or baseline.status not in ['optimal','feasible']:
             results.append({'site_id':site.id,'error':'Generate a current feasible baseline first.'}); continue
         for name,overrides in PRESETS.items():

@@ -6,6 +6,8 @@ from django.db import close_old_connections
 from django.utils import timezone
 from grid.models import LiveSession
 from grid.live import advance
+from grid.assessment import process_next
+from grid.models import PlanAssessment
 
 class Command(BaseCommand):
     help='Run one local simulator worker. Uses simulated time; never controls hardware.'
@@ -29,7 +31,8 @@ class Command(BaseCommand):
                 fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
         except OSError:
             self.stderr.write('A live worker is already running.');return
-        self.stdout.write('Live simulator worker ready (2-second ticks).')
+        PlanAssessment.objects.filter(status='running').update(status='pending')
+        self.stdout.write('Simulator and automatic plan-assessment worker ready.')
         try:
             while running:
                 started=time.monotonic();close_old_connections()
@@ -37,5 +40,6 @@ class Command(BaseCommand):
                     try:advance(pk,2)
                     except Exception:
                         logging.exception('Simulation tick failed for session %s',pk)
+                process_next()
                 time.sleep(max(.1,2-(time.monotonic()-started)))
         finally:lock.close()

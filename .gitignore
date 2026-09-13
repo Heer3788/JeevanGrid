@@ -8,3 +8,7 @@ __pycache__/
 test-results/
 *.log
 backend/live-worker.lock
+.tools/
+.local/
+
+backend/assistant-worker.lock

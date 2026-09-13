@@ -4,7 +4,21 @@ from rest_framework_simplejwt.views import TokenRefreshView
 from grid import views as v
 from grid import live_views as lv
 
+from grid.assistant import views as av
+from grid import report_views as rv
+
 urlpatterns = [
+    path('api/comparisons',rv.comparison),
+    path('api/reports',rv.create),path('api/reports/<int:pk>',rv.detail),path('api/reports/<int:pk>/download',rv.download),
+    path('api/assistant/config',av.configuration),path('api/assistant/conversations',av.conversations),
+    path('api/assistant/conversations/<int:pk>',av.conversation),
+    path('api/assistant/conversations/<int:pk>/messages',av.messages),
+    path('api/assistant/conversations/<int:pk>/attachments',av.attachments),
+    path('api/assistant/workflows/<int:pk>',av.workflow),
+    path('api/assistant/workflows/<int:pk>/clarify',av.clarify),
+    path('api/assistant/workflows/<int:pk>/cancel',av.cancel),path('api/assistant/workflows/<int:pk>/retry',av.retry),
+    path('api/auth/demo-accounts', v.demo_accounts),
+    path('api/team', v.team),
     path('api/sites/<int:pk>/live',lv.session),
     path('api/sites/<int:pk>/live/events',lv.event),
     path('api/sites/<int:pk>/live/commands/<int:command_id>',lv.decision),

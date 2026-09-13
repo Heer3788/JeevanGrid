@@ -14,6 +14,7 @@ with sync_playwright() as playwright:
     page.wait_for_timeout(2_000)
     if page.get_by_label('Password', exact=True).count() == 0:
         raise AssertionError(f'Login did not render. Browser errors: {errors}; body: {page.locator("body").inner_text()}')
+    page.get_by_label('Email address', exact=True).fill('admin@jeevangrid.local')
     page.get_by_label('Password', exact=True).fill(os.environ.get('JEEVANGRID_DEMO_PASSWORD', 'JeevanGridDemo!26'))
     page.get_by_role('button', name='Sign in', exact=True).click()
     page.get_by_role('link', name='Add site', exact=True).first.click()

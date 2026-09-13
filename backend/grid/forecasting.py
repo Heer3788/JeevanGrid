@@ -22,10 +22,12 @@ def demo_dataset(site, config):
     pv = solar_power(weather, config['solar'], site.latitude, site.longitude)
     shape = daily_shape(config['demand']['daily_kwh'], config['demand']['peak_kw'])
     fixed_share = 1-config['demand']['flexible_pct']/100
+    hourly = {pd.Timestamp(r.timestamp).tz_convert(site.timezone).hour:r.critical_kw+r.normal_kw
+              for r in site.load_profile.intervals.all()}
     rows = []
     for i, w in enumerate(weather):
         t = pd.Timestamp(w['timestamp']).tz_convert(site.timezone)
-        baseline = shape[t.hour]*fixed_share
+        baseline = hourly.get(t.hour, shape[t.hour]*fixed_share)
         load = baseline*(1+.12*(t.dayofweek>=5)+.008*(w['temperature']-24))+rng.normal(0, baseline*.025)
         actual_solar = pv[i]*(.86+.04*math.sin(t.hour/3))+rng.normal(0, pv[i]*.015)
         rows.append(dict(w, baseline_demand_kw=baseline, physics_solar_kw=pv[i],
@@ -63,7 +65,7 @@ def features(rows, tz):
         r['temperature'], r['baseline_demand_kw'], r['physics_solar_kw']] for r in rows])
 
 
-def train(site, config, rows, provenance):
+def train(site, config, rows, provenance, persist=True):
     n = len(rows); a, b = int(n*.65), int(n*.82)
     x = features(rows, site.timezone)
     artifacts, report = {'dataset': rows}, {'rows': n, 'features': ['hour','weekday','temperature','baseline demand','physics solar'],
@@ -92,6 +94,7 @@ def train(site, config, rows, provenance):
             'lower_residual_kw': float(np.quantile(residual,.1)), 'upper_residual_kw': float(np.quantile(residual,.9)),
             'evaluation': [{'timestamp':rows[i]['timestamp'], 'actual':float(actual[i]), 'baseline':float(baseline[i]), 'forecast':float(selected[i])} for i in range(b,min(n,b+48))]}
         artifacts[target] = base64.b64encode(model.get_booster().save_raw(raw_format='json')).decode()
+    if not persist:return {"report":report,"artifacts":artifacts,"provenance":provenance}
     return ForecastModel.objects.create(site=site, configuration_version=site.configuration_version,
         provenance=provenance, artifacts=artifacts, report=report)
 

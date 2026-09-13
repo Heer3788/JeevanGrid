@@ -15,8 +15,10 @@ STRATEGIES = ['lowest_cost', 'balanced', 'lowest_emissions']
 EVENTS = ['cloud', 'high_demand', 'generator_outage', 'low_battery', 'restore']
 
 
-def event(session, message):
+def event(session, message, kind='notice', data=None):
     session.events = (session.events+[{'time':session.simulated_at.isoformat(), 'message':message}])[-80:]
+    return m.ReplayEvent.objects.create(session=session, timestamp=session.simulated_at,
+                                       kind=kind, message=message, data=data or {})
 
 
 def options(data):
@@ -31,18 +33,27 @@ def options(data):
     return result
 
 
-def start(site, user, data):
+def start(site, user, data, baseline=None, replan_now=True):
     opts = options(data)
     existing = m.LiveSession.objects.filter(site=site).first()
     if existing and existing.active: fail('Pause the current session before starting a new demonstration.')
-    snapshot = svc.prepare_snapshot(site,'simulated')
-    start_at = pd.Timestamp.now(tz=site.timezone).normalize()+pd.Timedelta(hours=12)
-    weather = simulated_weather(start_at)
-    pv = solar_power(weather,snapshot['configuration']['solar'],site.latitude,site.longitude)
-    lookup = {pd.Timestamp(r['timestamp']).tz_convert(site.timezone).hour:r for r in snapshot['inputs']}
-    snapshot['weather']['intervals'] = weather
-    snapshot['inputs'] = [dict(lookup[pd.Timestamp(w['timestamp']).hour],timestamp=w['timestamp'],solar_available=pv[i],
-                              wind_available=wind_power(w['wind_speed'],snapshot['configuration']['wind'])) for i,w in enumerate(weather)]
+    if baseline:
+        if baseline.site_id != site.pk or baseline.mode == 'scenario' or baseline.status not in ['optimal', 'feasible']:
+            fail('Choose a feasible original plan from this site.')
+        if baseline.configuration_version != site.configuration_version:
+            fail('Site inputs changed. Generate a new plan before testing.')
+        snapshot = deepcopy(baseline.snapshot)
+        snapshot['baseline_run_id'] = baseline.pk
+        start_at = pd.Timestamp(snapshot['inputs'][0]['timestamp']).tz_convert(site.timezone)
+    else:
+        snapshot = svc.prepare_snapshot(site,'simulated')
+        start_at = pd.Timestamp.now(tz=site.timezone).normalize()+pd.Timedelta(hours=12)
+        weather = simulated_weather(start_at)
+        pv = solar_power(weather,snapshot['configuration']['solar'],site.latitude,site.longitude)
+        lookup = {pd.Timestamp(r['timestamp']).tz_convert(site.timezone).hour:r for r in snapshot['inputs']}
+        snapshot['weather']['intervals'] = weather
+        snapshot['inputs'] = [dict(lookup[pd.Timestamp(w['timestamp']).hour],timestamp=w['timestamp'],solar_available=pv[i],
+                                  wind_available=wind_power(w['wind_speed'],snapshot['configuration']['wind'])) for i,w in enumerate(weather)]
     state = deepcopy(snapshot['state'])
     state.update(generator_kw=snapshot['configuration']['generator']['min_power_kw'] if state['generator_on'] else 0,
         generator_elapsed_hours=24, starts=0, solar_multiplier=1, wind_multiplier=1,
@@ -52,11 +63,11 @@ def start(site, user, data):
     with transaction.atomic():
         session = m.LiveSession.objects.create(site=site,active=True,created_by=user,
             configuration_version=site.configuration_version,snapshot=snapshot,state=state,options=opts,
-            simulated_at=start_at.to_pydatetime(),heartbeat=None,last_plan_at=None,latest_run=None,events=[])
+            simulated_at=start_at.to_pydatetime(),heartbeat=None,last_plan_at=None,latest_run=None,events=[],evidence_version=3)
         session.commands.filter(status__in=['proposed','approved']).update(status='superseded')
-        event(session, 'Simulation started at local noon. All telemetry and equipment commands are simulated.')
+        event(session, f'Simulation started from plan #{baseline.pk}.' if baseline else 'Simulation started at local noon.', 'start', {'active':True,'baseline_id':baseline.pk if baseline else None})
         session.save(update_fields=['events'])
-    replan(session.pk,'Initial operating plan')
+    if replan_now: replan(session.pk,'Initial operating plan')
     return session
 
 
@@ -65,6 +76,7 @@ def inject(session, kind):
     if kind not in EVENTS: fail('Unknown demonstration event.')
     if not session.active: fail('Start a simulation first.')
     s = session.state
+    before = {k:s.get(k) for k in ['soc_pct','solar_multiplier','event_demand_multiplier','generator_available','generator_on']}
     if kind=='cloud': s['solar_multiplier']=.25
     if kind=='high_demand': s['event_demand_multiplier']=1.5
     if kind=='generator_outage':
@@ -72,11 +84,15 @@ def inject(session, kind):
     if kind=='low_battery':
         battery=session.snapshot['configuration']['battery']
         s['soc_pct']=max(battery['min_soc'],min(battery['max_soc'],25))
+        s['minimum_soc_pct']=min(s['minimum_soc_pct'],s['soc_pct'])
     if kind=='restore': s.update(solar_multiplier=1,event_demand_multiplier=1,generator_available=True)
     s['force_replan']=True
+    s['event_revision'] = s.get('event_revision', 0) + 1
     session.commands.filter(status__in=['proposed','approved']).update(status='superseded')
-    event(session, f'{kind.replace("_"," ").title()} event applied; a new plan is required.')
+    record = event(session, f'{kind.replace("_"," ").title()} event applied; a new plan is required.', kind,
+        {'before':before, 'after':{k:s.get(k) for k in before}, 'revision':s['event_revision']})
     session.save(update_fields=['state','events'])
+    return record
 
 
 def live_snapshot(session):
@@ -98,12 +114,16 @@ def live_snapshot(session):
     # Daily flexible jobs keep their original deadline and remaining energy across replans.
     for f in snap['configuration']['flexible_loads']:
         f['required_kwh']=max(0,f['required_kwh']-state['flexible_served'].get(f['name'],0))
-        f['window_start']=(original.normalize()+pd.Timedelta(hours=f['start_hour'])).isoformat()
-        f['window_end']=(original.normalize()+pd.Timedelta(hours=f['end_hour'])).isoformat()
+        day = original.tz_convert(snap['site']['timezone']).normalize()
+        if day + pd.Timedelta(hours=f['end_hour']) <= original:
+            day += pd.Timedelta(days=1)
+        f['window_start']=(day+pd.Timedelta(hours=f['start_hour'])).isoformat()
+        f['window_end']=(day+pd.Timedelta(hours=f['end_hour'])).isoformat()
     snap['strategy']=session.options['strategy']
     snap['carbon_price_inr_per_kg']=session.options['carbon_price_inr_per_kg']
     apply_forecast(session.site,snap,session.options['use_ml'],session.options['conservative'])
     snap['live_session_id']=session.pk
+    snap['event_revision']=state.get('event_revision',0)
     return snap
 
 
@@ -117,7 +137,9 @@ def replan(pk, reason):
         if not current.active or current.state!=session.state or current.options!=session.options: return
         run=svc.persist_run(session.site,session.created_by,'live_simulation',snapshot,result)
         current.latest_run=run;current.last_plan_at=current.simulated_at;current.state['force_replan']=False
-        current.commands.filter(status__in=['proposed','approved','executing']).update(status='superseded')
+        # Applied setpoints can take longer than five minutes to ramp. Keep
+        # their verification active until a newly approved command replaces them.
+        current.commands.filter(status__in=['proposed','approved']).update(status='superseded')
         event(current, f'{reason}: {result["status"]}; dispatch recalculated from current SOC and fuel.')
         if result['intervals']:
             first=result['intervals'][0]
@@ -133,6 +155,8 @@ def replan(pk, reason):
 
 @transaction.atomic
 def review(session, command, user, decision, reason):
+    session.refresh_from_db();command.refresh_from_db()
+    if command.session_id!=session.pk:fail('Command belongs to another replay.')
     if decision not in ['approve','reject']: fail('Choose approve or reject.')
     if not isinstance(reason,str) or len(reason)>500: fail('Reason must be at most 500 characters.')
     if decision=='reject' and not reason.strip(): fail('Give a reason for rejecting the proposal.')
@@ -142,9 +166,28 @@ def review(session, command, user, decision, reason):
     if session.site.configuration_version!=session.configuration_version: fail('Site configuration changed; restart the simulation.')
     command.status='approved' if decision=='approve' else 'rejected'
     command.reviewed_by=user;command.reviewed_at=timezone.now();command.reason=reason;command.save()
+    event(session,f'Command #{command.pk}: {decision} recorded.','command_review',{'command_id':command.pk,'decision':decision,'reason':reason,'user_id':user.pk})
+    session.save(update_fields=['events'])
 
 
 def advance(pk, wall_seconds=2):
+    """Split accelerated ticks at source/local-hour boundaries and the 24-hour end."""
+    session=m.LiveSession.objects.get(pk=pk)
+    remaining=wall_seconds*session.options['speed']
+    while remaining>1e-7:
+        session.refresh_from_db()
+        if not session.active:return
+        t=pd.Timestamp(session.simulated_at).tz_convert(session.site.timezone)
+        elapsed=(t-pd.Timestamp(session.snapshot['inputs'][0]['timestamp'])).total_seconds()
+        until_source_hour=3600-(elapsed%3600)
+        until_local_hour=(t.floor('h')+pd.Timedelta(hours=1)-t).total_seconds()
+        seconds=min(remaining,until_source_hour,until_local_hour,86400-session.state['elapsed_seconds'])
+        if seconds<=1e-7:return
+        _advance_interval(pk,seconds/session.options['speed'])
+        remaining-=seconds
+
+
+def _advance_interval(pk, wall_seconds=2):
     """One worker owns time; browser refreshes never advance the plant."""
     with transaction.atomic():
         session=m.LiveSession.objects.select_related('site').get(pk=pk)
@@ -152,7 +195,7 @@ def advance(pk, wall_seconds=2):
         if session.site.archived or session.configuration_version!=session.site.configuration_version:
             session.active=False;event(session,'Site changed or archived. Simulation paused; restart with current configuration.')
             session.save(update_fields=['active','events']);return
-        c=session.snapshot['configuration'];s=session.state;b=c['battery'];g=c['generator']
+        c=session.snapshot['configuration'];s=session.state;b=c['battery'];g=c['generator'];initial_cost=s['cost_inr']
         seconds=wall_seconds*session.options['speed'];dt=seconds/3600
         t=pd.Timestamp(session.simulated_at).tz_convert(session.site.timezone)
         first=pd.Timestamp(session.snapshot['inputs'][0]['timestamp'])
@@ -172,6 +215,7 @@ def advance(pk, wall_seconds=2):
                 pending.status='failed';pending.result={'error':error,'provenance':'simulated'};pending.save()
                 event(session,error);s['force_replan']=True
             else:
+                session.commands.filter(status='executing').update(status='superseded')
                 if on!=old:
                     s['generator_elapsed_hours']=0
                     if on:s['starts']+=1;s['cost_inr']+=g['start_cost']
@@ -225,13 +269,15 @@ def advance(pk, wall_seconds=2):
         telemetry={'timestamp':session.simulated_at.isoformat(),'interval_start':t.isoformat(),'interval_seconds':seconds,
             'solar_kw':solar,'wind_kw':wind,'demand_kw':demand,'generator_kw':diesel,'generator_on':s['generator_on'],
             'battery_charge_kw':charge,'battery_discharge_kw':discharge,'soc_pct':s['soc_pct'],'fuel_l':s['fuel_l'],
-            'served_kw':served,'critical_unserved_kw':critical-served_critical,'curtailed_kw':curtailed,
+            'served_kw':served,'critical_requested_kw':critical,'normal_requested_kw':normal,'diesel_litres':litres,'dispatch_cost_inr':s['cost_inr']-initial_cost,'critical_unserved_kw':critical-served_critical,'curtailed_kw':curtailed,
+            'normal_unserved_kw':normal-served_normal,'flexible_requested_kw':sum(tasks.values()),
+            'flexible_served_kwh':deepcopy(s['flexible_served']), 'event_revision':s.get('event_revision',0),
             'balance_error_kw':solar+wind+diesel+discharge-charge-served-curtailed,
             'forecast_demand_kw':row['critical_kw']+row['normal_kw'],'forecast_solar_kw':row['solar_available'],'provenance':'simulated'}
         s['telemetry']=telemetry
         for command in session.commands.filter(status='executing'):
             p=command.proposal
-            if bool(s['generator_on'])==p['generator_on'] and abs(diesel-p['generator_kw'])<.05:
+            if bool(s['generator_on'])==p['generator_on'] and abs(diesel-p['generator_kw'])<.05 and abs(telemetry['balance_error_kw'])<.001:
                 command.status='verified';command.result.update(verified_at=session.simulated_at.isoformat(),telemetry=telemetry)
                 event(session,'Command verified against fresh simulated generator output and energy balance.')
             elif session.simulated_at>command.expires_at+timedelta(hours=1):
@@ -239,15 +285,14 @@ def advance(pk, wall_seconds=2):
             command.save(update_fields=['status','result'])
         if s['elapsed_seconds']>=86400:
             session.active=False;event(session,'24-hour demonstration complete. Review the observed simulation metrics.')
-        if not session.samples.exists() or (session.simulated_at-session.samples.first().timestamp).total_seconds()>=60:
-            m.TelemetrySample.objects.create(session=session,timestamp=session.simulated_at,data=telemetry)
+        m.TelemetrySample.objects.create(session=session,timestamp=session.simulated_at,data=telemetry)
         session.save(update_fields=['state','simulated_at','heartbeat','active','events'])
         due=session.active and (s['force_replan'] or not session.last_plan_at or (session.simulated_at-session.last_plan_at).total_seconds()>=300)
     if due: replan(pk,'Operating conditions changed' if s['force_replan'] else 'Five-minute rolling update')
 
 
-def status(site):
-    session=m.LiveSession.objects.filter(site=site).select_related('latest_run').first()
+def status(site, session=None):
+    session=session or m.LiveSession.objects.filter(site=site).select_related('latest_run').first()
     version=site.forecast_models.first()
     model={'id':version.pk,'report':version.report,'configuration_version':version.configuration_version} if version else None
     if not session:return {'session':None,'model':model}
@@ -255,8 +300,13 @@ def status(site):
     stale=not session.heartbeat or (timezone.now()-session.heartbeat).total_seconds()>15
     requested=s.get('critical_requested_kwh',0)
     return {'session':{'id':session.pk,'active':session.active,'simulated_at':session.simulated_at.isoformat(),
+            'baseline_id':session.snapshot.get('baseline_run_id'),
             'heartbeat':session.heartbeat.isoformat() if session.heartbeat else None,'stale':stale,'options':session.options,
             'telemetry':s.get('telemetry'), 'events':session.events,'last_plan_at':session.last_plan_at,
+            'modifiers':{k:s.get(k) for k in ['solar_multiplier','event_demand_multiplier','generator_available']},
+            'event_records':list(session.event_records.exclude(kind='notice').values('id','timestamp','kind','message','data')),
+            'flexible_remaining_kwh':sum(max(0,f['required_kwh']-s['flexible_served'].get(f['name'],0)) for f in session.snapshot['configuration']['flexible_loads']),
+            'sample_count':session.samples.count(), 'history_complete':session.evidence_version>=2,
             'evidence':{'critical_service_pct':100*(1-s['critical_unserved_kwh']/requested) if requested else None,
                 'critical_unserved_kwh':s.get('critical_unserved_kwh',0),'diesel_litres':s.get('fuel_used_l',0),
                 'emissions_kg':s.get('fuel_used_l',0)*session.snapshot['configuration']['generator']['emissions_factor'],

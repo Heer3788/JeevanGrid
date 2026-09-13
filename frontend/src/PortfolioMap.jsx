@@ -16,11 +16,11 @@ export default function PortfolioMap({sites}) {
     // Bundled coastlines: panning and zooming never disclose site locations.
     const instance=L.map(node.current,{scrollWheelZoom:false,minZoom:3,maxZoom:10}).setView([23.2,82],4);
     map.current=instance;
-    L.geoJSON(land,{interactive:false,style:{color:'#9eafb3',weight:1,fillColor:'#edf3ee',fillOpacity:1}}).addTo(instance);
-    for(let lat=0;lat<=50;lat+=5)L.polyline([[lat,50],[lat,115]],{color:'#8bb0b9',weight:.5,opacity:.35,interactive:false}).addTo(instance);
-    for(let lon=55;lon<=110;lon+=5)L.polyline([[-5,lon],[50,lon]],{color:'#8bb0b9',weight:.5,opacity:.35,interactive:false}).addTo(instance);
+    L.geoJSON(land,{interactive:false,style:{color:'#a6c3c5',weight:.8,fillColor:'#f7faf8',fillOpacity:1}}).addTo(instance);
+    for(let lat=0;lat<=50;lat+=5)L.polyline([[lat,50],[lat,115]],{color:'#b1cdce',weight:.5,opacity:.3,interactive:false}).addTo(instance);
+    for(let lon=55;lon<=110;lon+=5)L.polyline([[-5,lon],[50,lon]],{color:'#b1cdce',weight:.5,opacity:.3,interactive:false}).addTo(instance);
     [['New Delhi',28.61,77.21],['Mumbai',19.08,72.88],['Kolkata',22.57,88.36],['Chennai',13.08,80.27],['Guwahati',26.14,91.74]].forEach(([name,lat,lon])=>{
-      L.circleMarker([lat,lon],{radius:2,color:'#778e95',weight:1,interactive:false}).addTo(instance).bindTooltip(name,{permanent:true,direction:'right',className:'map-place-label'});
+      L.circleMarker([lat,lon],{radius:2,color:'#729aa4',weight:1,interactive:false}).addTo(instance).bindTooltip(name,{permanent:true,direction:'right',className:'map-place-label'});
     });
     instance.attributionControl.addAttribution('<a href="https://www.naturalearthdata.com/about/terms-of-use/">Natural Earth</a> · offline coastlines');
     const observer=new ResizeObserver(()=>instance.invalidateSize());observer.observe(node.current);
@@ -50,8 +50,8 @@ export default function PortfolioMap({sites}) {
   function select(s){setSelected(s.id);map.current?.setView([s.latitude,s.longitude],6,{animate:false});markers.current.get(s.id)?.openPopup();}
   function overview(){map.current?.closePopup();map.current?.setView([23.2,82],4,{animate:false});}
   const m=active?.latest_run?.metrics||{};
-  return <section className="panel portfolio-map-panel"><div className="section-heading"><div><h2>Energy sites, in context</h2><p>Select a location to review supply and the next decision.</p></div><button className="secondary" onClick={overview}><Maximize2 size={14}/>India overview</button></div>
-    <div className="map-layout"><div><div ref={node} className="portfolio-map" aria-label="Microgrid site locations"/>
+  return <section className="panel portfolio-map-panel"><div className="section-heading"><div><h2>Network locations</h2><p>Select a location to review supply and the next decision.</p></div><button className="secondary" onClick={overview}><Maximize2 size={14}/>India overview</button></div>
+    <div className="map-layout"><div className="map-canvas-wrap"><div ref={node} className="portfolio-map" aria-label="Microgrid site locations"/>
       <div className="map-caption"><span><span className="map-key green"/> Reliable</span><span><span className="map-key amber"/> Review</span><span><span className="map-key red"/> At risk</span><small>Number = sites at that coordinate</small></div>
     </div><div className="map-inspector">
       <label className="field"><span>Inspect site</span><select aria-label="Inspect map site" value={active?.id||''} onChange={e=>{const s=valid.find(s=>s.id===Number(e.target.value));if(s)select(s)}}>{valid.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></label>

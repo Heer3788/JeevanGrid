@@ -34,6 +34,13 @@ class SiteAssignment(models.Model):
         constraints = [models.UniqueConstraint(fields=['site', 'user'], name='unique_site_operator')]
 
 
+class PlanAssessment(models.Model):
+    run = models.OneToOneField('OptimizationRun', on_delete=models.CASCADE, related_name='assessment')
+    status = models.CharField(max_length=16, default='pending')
+    error = models.TextField(blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
 class ConfigBase(models.Model):
     data = models.JSONField(default=dict)
     class Meta:
@@ -154,6 +161,7 @@ class LiveSession(models.Model):
     last_plan_at = models.DateTimeField(null=True)
     latest_run = models.ForeignKey(OptimizationRun, on_delete=models.SET_NULL, null=True)
     events = models.JSONField(default=list)
+    evidence_version = models.PositiveIntegerField(default=1)
 
     class Meta:
         ordering = ['-pk']
@@ -197,3 +205,87 @@ class ForecastModel(models.Model):
 
     class Meta:
         ordering = ['-pk']
+
+
+class ReplayEvent(models.Model):
+    session = models.ForeignKey(LiveSession, on_delete=models.CASCADE, related_name='event_records')
+    timestamp = models.DateTimeField()
+    kind = models.CharField(max_length=40, default='notice')
+    message = models.TextField()
+    data = models.JSONField(default=dict)
+
+    class Meta:
+        ordering = ['timestamp', 'pk']
+
+
+class Conversation(models.Model):
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE)
+    site = models.ForeignKey(Site, null=True, blank=True, on_delete=models.PROTECT)
+    title = models.CharField(max_length=160, default='New conversation')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
+class ChatMessage(models.Model):
+    conversation = models.ForeignKey(Conversation, on_delete=models.CASCADE, related_name='messages')
+    role = models.CharField(max_length=12)
+    text = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['pk']
+
+
+class WorkflowRun(models.Model):
+    conversation = models.ForeignKey(Conversation, on_delete=models.CASCADE, related_name='workflows')
+    message = models.OneToOneField(ChatMessage, on_delete=models.CASCADE)
+    request_key = models.CharField(max_length=80)
+    workflow = models.CharField(max_length=60, blank=True)
+    version = models.PositiveIntegerField(default=1)
+    status = models.CharField(max_length=30, default='queued')
+    inputs = models.JSONField(default=dict)
+    context = models.JSONField(default=dict)
+    result = models.JSONField(default=dict)
+    error = models.TextField(blank=True)
+    question = models.TextField(blank=True)
+    attempts = models.PositiveIntegerField(default=0)
+    next_attempt_at = models.DateTimeField(null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['conversation', 'request_key'], name='unique_chat_request')]
+
+
+class WorkflowStep(models.Model):
+    run = models.ForeignKey(WorkflowRun, on_delete=models.CASCADE, related_name='steps')
+    key = models.CharField(max_length=80)
+    label = models.CharField(max_length=160)
+    inputs = models.JSONField(default=dict)
+    receipt = models.JSONField(default=dict)
+    verification = models.JSONField(default=dict)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['pk']
+        constraints = [models.UniqueConstraint(fields=['run', 'key'], name='unique_workflow_step')]
+
+
+class ChatAttachment(models.Model):
+    conversation = models.ForeignKey(Conversation, on_delete=models.CASCADE)
+    name = models.CharField(max_length=160)
+    content = models.BinaryField()
+    sha256 = models.CharField(max_length=64)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+
+class ReportArtifact(models.Model):
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    site_ids = models.JSONField(default=list)
+    name = models.CharField(max_length=160)
+    format = models.CharField(max_length=8)
+    basis = models.JSONField(default=dict)
+    content = models.BinaryField()
+    sha256 = models.CharField(max_length=64)
+    created_at = models.DateTimeField(auto_now_add=True)

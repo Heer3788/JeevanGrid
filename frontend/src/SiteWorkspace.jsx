@@ -1,0 +1,67 @@
+import React,{useCallback,useEffect,useState} from 'react';
+import {Link,useParams} from 'react-router-dom';
+import {ArrowLeft,ArrowUpRight,Battery,Fuel,SlidersHorizontal,Check,RefreshCw,History} from 'lucide-react';
+import {api} from './api';
+import {Metric,Dialog,Input,ErrorNotice,number as n,timestamp} from './ui';
+import {ReliabilityBadge,ConfigurationCards,useAnalysis} from './Intelligence';
+import PlanCharts from './PlanCharts';
+import {colors} from './chartTheme';
+import PlanTesting,{AutomaticChecks,PlanImpact,ScenarioResult} from './PlanTesting';
+
+const sourceNames={simulated:'Demo weather',open_meteo:'Open-Meteo forecast',nasa_power:'NASA historical weather'};
+const modes={simulated:'simulated',open_meteo:'forecast',nasa_power:'historical'};
+const recommendations={START_GENERATOR:'Schedule diesel backup',STOP_GENERATOR:'Stop the generator',USE_RENEWABLES_AND_STORAGE:'Use renewables and storage',CRITICAL_SHORTAGE:'Essential demand needs attention',REVIEW_CONFIGURATION:'Review site limits'};
+
+export default function SiteWorkspace({user}) {
+  const {id}=useParams(),[site,setSite]=useState(null),[run,setRun]=useState(null),[history,setHistory]=useState([]);
+  const [tab,setTab]=useState('plan'),[mode,setMode]=useState('simulated'),[date,setDate]=useState('2025-01-15');
+  const [busy,setBusy]=useState(''),[error,setError]=useState(''),[notice,setNotice]=useState(''),[dialog,setDialog]=useState(''),[state,setState]=useState({}),[reason,setReason]=useState(''),[scenario,setScenario]=useState(null);
+  const {data:analysis,error:analysisError}=useAnalysis(run?.id);
+  const load=useCallback(async()=>{
+    const s=await api(`/sites/${id}`);
+    const [r,h]=await Promise.all([s.latest_run?api(`/optimization-runs/${s.latest_run.id}`):null,api(`/optimization-runs?site_id=${id}&kind=plan`)]);
+    setSite(s);setRun(r);setHistory(h);setState(s.current_state);return r;
+  },[id]);
+  useEffect(()=>{let active=true;setSite(null);load().then(r=>{if(active&&r){setMode(modes[r.weather_source]||'simulated');if(r.mode==='historical')setDate(r.snapshot.inputs[0].timestamp.slice(0,10))}}).catch(e=>{if(active)setError(e.message)});return()=>{active=false}},[load]);
+  useEffect(()=>{const changed=()=>load().catch(e=>setError(e.message));window.addEventListener('jg-data-changed',changed);return()=>window.removeEventListener('jg-data-changed',changed)},[load]);
+  async function task(name,fn){setBusy(name);setError('');setNotice('');try{await fn()}catch(e){setError(e.message)}finally{setBusy('')}}
+  async function generate(){await task('generate',async()=>{
+    const next=await api(`/sites/${id}/optimization-runs`,{method:'POST',body:{mode,date}});
+    await load();setRun(next);setNotice(`Plan #${next.id} generated using ${sourceNames[next.weather_source]||next.weather_source}. Stress scenarios are being evaluated against this plan.`);
+  })}
+  async function saveState(e){e.preventDefault();await task('readings',async()=>{
+    const {soc_pct,fuel_l,diesel_price,demand_multiplier,generator_available,generator_on,event}=state;
+    await api(`/sites/${id}/readings`,{method:'POST',body:{soc_pct,fuel_l,diesel_price,demand_multiplier,generator_available,generator_on,event}});
+    await load();setDialog('');setNotice('Readings saved. Generate a new plan to use this operating state.');
+  })}
+  async function review(decision){await task('review',async()=>{await api(`/optimization-runs/${run.id}/decision`,{method:'POST',body:{decision,reason}});await load();setDialog('');setReason('');setNotice('Your plan review is recorded. Equipment actions can be tested in Live replay.')})}
+  if(!site)return <><ErrorNotice error={error}/><div className="loading">Loading site workspace…</div></>;
+  const m=run?.metrics||{},c=site.configuration,saved=run?.snapshot.state;
+  const changed=run&&(modes[run.weather_source]!==mode||(mode==='historical'&&run.snapshot.inputs[0].timestamp.slice(0,10)!==date));
+  const reviewable=run&&['optimal','feasible'].includes(run.status)&&site.reliability.inputs_current&&!site.archived;
+  return <div className="site-workspace"><Link className="back" to="/sites"><ArrowLeft size={15}/>All sites</Link>
+    <header className="page-head"><div><div className="eyebrow">{site.district} · {site.state}</div><h1>{site.name}</h1><p>Plan the day. Test changes. Review the decision.</p></div><div className="actions"><button className="secondary" onClick={()=>setDialog('readings')}><SlidersHorizontal size={16}/>Update readings</button>{user.role==='admin'&&<Link className="secondary" to={`/sites/${id}/edit`}>Configure site</Link>}</div></header>
+    <div className="workspace-tabs" role="tablist" aria-label="Site workflow">{[['plan','1','Plan'],['test','2','Test plan']].map(([k,num,l])=><button key={k} role="tab" aria-selected={tab===k} disabled={k==='test'&&!run} onClick={()=>setTab(k)}><span>{num}</span>{l}</button>)}</div>
+    <ErrorNotice error={error}/>{notice&&<p className="notice" role="status">{notice}</p>}{site.archived&&<p className="notice amber">Archived site. Saved plans remain available.</p>}
+    {tab==='plan'?<>
+      <section className="panel planning-inputs"><div><h2>Plan inputs</h2><p>{mode==='forecast'?'Use the regional weather forecast for the next 24 hours.':mode==='historical'?'Replay a past day using NASA regional weather.': 'Use repeatable simulated weather to explore this site.'} Demand comes from the site’s saved profile.</p></div><div className="actions"><label className="source-field">Weather source<select aria-label="Weather source" disabled={!!busy} value={mode} onChange={e=>setMode(e.target.value)}><option value="simulated">Demo weather</option><option value="forecast">Live weather forecast</option><option value="historical">NASA historical replay</option></select></label>{mode==='historical'&&<Input label="Historical date" type="date" value={date} onChange={setDate} required/>}<button className="primary" disabled={!!busy||site.archived} onClick={generate}>{busy==='generate'?<RefreshCw className="spin" size={16}/>:<ArrowUpRight size={16}/>} {busy==='generate'?'Fetching data & planning…':'Generate plan'}</button></div>{changed&&<p className="source-pending" role="status">Source changed. Generate a plan to apply it. The result below is still #{run.id}, using {sourceNames[run.weather_source]}.</p>}</section>
+      {run?<><div className="plan-context"><span>Plan <b>#{run.id}</b> · {sourceNames[run.weather_source]||run.weather_source} · {timestamp(run.horizon_start)}</span><Link to={`/data?site=${id}&run=${run.id}`}>Inspect its data <ArrowUpRight size={13}/></Link></div>
+        <section className={'decision-panel '+(m.critical_unserved_kwh>.001?'at-risk':'')}><div><div className="eyebrow">NEXT OPERATOR DECISION</div><h2>{recommendations[run.next_action.action]||run.next_action.action}</h2><p>{run.next_action.reason}</p><div className="actions"><button className="primary decision-primary" onClick={()=>setDialog('review')}>Review plan <Check size={16}/></button><button className="secondary decision-secondary" onClick={()=>setDialog('impact')}>Compare with reactive</button></div></div><div className="plan-state"><span>Starting state used in this plan</span><div><Battery size={19}/><b>{n(saved.soc_pct)}%</b> stored energy</div><div><Fuel size={19}/><b>{n(saved.fuel_l)} L</b> fuel available</div><small>{run.state_source==='simulated'?'Simulated reading':`Reading from ${timestamp(saved.timestamp)}`}</small></div></section>
+        {!site.reliability.inputs_current&&<p className="notice amber">{site.reliability.assessment}</p>}
+        <div className="stats"><Metric label="Critical energy served" value={n(m.critical_load_served_pct)} unit="%"><p>{n(m.critical_unserved_kwh)} kWh critical shortage; {n(m.normal_unserved_kwh)} kWh normal shortage.</p></Metric><Metric label="Dispatch cost" value={n(m.dispatch_cost_inr,0)} unit="INR"><p>Fuel {n(m.fuel_cost_inr)} · starts {n(m.generator_start_cost_inr)} · battery wear {n(m.battery_wear_cost_inr)} INR.</p></Metric><Metric label="Diesel required" value={n(m.diesel_litres)} unit="L"><p>{m.generator_starts} starts · {n(m.emissions_kg_co2)} kg CO₂ projected.</p></Metric><Metric label="Renewable generation" value={n(m.renewable_share_pct)} unit="%"><p>{n(m.renewable_curtailed_kwh)} kWh renewable energy curtailed; {n(m.minimum_soc_pct)}% minimum battery.</p></Metric></div>
+        {run.diagnostics.map((d,i)=><p key={i} className="notice amber">{d}</p>)}
+        <PlanCharts run={run} tz={site.timezone}/>
+        <AutomaticChecks baseline={run} site={site} compact onSelect={r=>task('scenario',async()=>{setScenario(await api(`/optimization-runs/${r.id}`));setDialog('scenario')})}/>
+        <details className="panel"><summary>Costs, emissions & explanation</summary><div className="cost-bars">{[['Fuel',m.fuel_cost_inr,colors.diesel],['Generator starts',m.generator_start_cost_inr,colors.reference],['Battery wear',m.battery_wear_cost_inr,colors.battery]].map(([l,v,color])=><div key={l}><span>{l}</span><div><i style={{width:`${Math.max(0,100*v/Math.max(1,m.dispatch_cost_inr))}%`,background:color}}/></div><b>{n(v)} INR</b></div>)}</div><p>{n(m.emissions_kg_co2)} kg CO₂ combustion emissions · {n(m.penalty_cost_inr)} INR model penalties (excluded from cash costs) · {n(m.flexible_unserved_kwh)} kWh flexible work unfinished.</p>{analysis?.explanation?.map((p,i)=><p key={i}>{p}</p>)}</details>
+      </>:<div className="empty">Choose a weather source and generate the first plan.</div>}
+      <details className="panel plan-history"><summary><History size={16}/> Recent plans <span>{history.length}</span></summary>{history.length?<div className="history-list">{history.slice(0,8).map(r=><Link key={r.id} to={`/runs/${r.id}`}><span><b>#{r.id}</b> · {sourceNames[r.weather_source]||r.mode}<small>{timestamp(r.created_at)}</small></span><span>{n(r.metrics.diesel_litres)} L diesel · {n(r.metrics.critical_load_served_pct)}% critical served<small>{r.decisions.at(-1)?.decision||'Awaiting review'}</small></span><ArrowUpRight size={16}/></Link>)}</div>:<p>No plans yet.</p>}</details>
+      <details className="panel equipment-panel"><summary>Site equipment & source notes</summary><ConfigurationCards configuration={c} run={run}/><p>{site.provenance.note}</p>{(site.provenance.study_fields||[]).map(t=><p key={t}>{t}</p>)}{(site.provenance.source_url||site.provenance.study_url)&&<a href={site.provenance.source_url||site.provenance.study_url} target="_blank" rel="noreferrer">Published source <ArrowUpRight size={14}/></a>}{user.role==='admin'&&<button className="text-button block" disabled={!!busy} onClick={()=>task('archive',async()=>{await api(`/sites/${id}`,{method:'PATCH',body:{archived:!site.archived}});await load()})}>{site.archived?'Restore site':'Archive site'}</button>}</details>
+    </>:run&&<PlanTesting key={run.id} site={site} baseline={run} user={user}/>}
+    {dialog&&<Dialog title={{readings:'Update operating readings',review:`Review plan #${run?.id}`,impact:'Does planning ahead help?',scenario:'Stress-test comparison'}[dialog]} onClose={()=>setDialog('')}><ErrorNotice error={error}/>
+      {dialog==='readings'&&<><p>Update the current battery, fuel and operating conditions before generating a plan. These readings change over time.</p><form onSubmit={saveState}><div className="form-grid">{[['soc_pct','Battery charge (%)'],['fuel_l','Fuel available (L)'],['diesel_price','Diesel price (INR/L)'],['demand_multiplier','Demand multiplier']].map(([k,l])=><Input key={k} label={l} value={state[k]} onChange={v=>setState({...state,[k]:v})} step="any" required/>)}</div><label className="check"><input type="checkbox" checked={!!state.generator_available} onChange={e=>setState({...state,generator_available:e.target.checked})}/>Generator available</label><label className="check"><input type="checkbox" checked={!!state.generator_on} onChange={e=>setState({...state,generator_on:e.target.checked})}/>Generator currently running</label><Input label="Local event or context" type="text" value={state.event} onChange={v=>setState({...state,event:v})}/><button className="primary" disabled={!!busy||site.archived}>Save readings</button></form></>}
+      {dialog==='review'&&<><p>Record your review of this 24-hour recommendation. Testing equipment commands is available in Test plan → Live replay.</p><div className="summary-row"><span>Critical service</span><b>{n(m.critical_load_served_pct)}%</b></div><div className="summary-row"><span>Lowest battery reserve</span><b>{n(m.minimum_soc_pct)}%</b></div><label className="field"><span>Review or override reason</span><textarea aria-label="Review or override reason" value={reason} onChange={e=>setReason(e.target.value)} placeholder="For example: fuel delivery is delayed."/></label>{!reviewable&&<p className="notice amber">Generate a current feasible plan before reviewing.</p>}<div className="actions"><button className="primary" disabled={!!busy||!reviewable} onClick={()=>review('confirm')}>Confirm plan</button><button className="secondary" disabled={!!busy||!reviewable||!reason.trim()} onClick={()=>review('override')}>Record override</button></div>{run.decisions.map((d,i)=><p key={i}>{d.decision} · {d.user__email} · {d.reason||'Reviewed'}</p>)}</>}
+      {dialog==='impact'&&<PlanImpact run={run} analysis={analysis} error={analysisError}/>}
+      {dialog==='scenario'&&scenario&&<ScenarioResult baseline={run} result={scenario}/>}
+    </Dialog>}
+  </div>;
+}

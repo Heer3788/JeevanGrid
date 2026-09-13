@@ -57,7 +57,7 @@ def test_command_expiry_rejection_and_permissions(setup):
     live.review(session,cmd,users['operator'],'reject','Keep current plan')
     with pytest.raises(ValidationError):live.review(session,cmd,users['operator'],'approve','')
     live.replan(session.pk,'Test');session.refresh_from_db();cmd=session.commands.filter(status='proposed').first()
-    session.simulated_at=cmd.expires_at
+    session.simulated_at=cmd.expires_at;session.save(update_fields=['simulated_at'])
     with pytest.raises(ValidationError):live.review(session,cmd,users['operator'],'approve','')
 
 

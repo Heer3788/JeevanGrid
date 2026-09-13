@@ -32,3 +32,11 @@ export async function api(path, options={}, retry=true) {
   if(!res.ok) throw Error(message(body));
   return body;
 }
+
+export async function downloadArtifact(id,name='jeevangrid-report.pdf') {
+  await api('/auth/me');
+  const response=await fetch(`/api/reports/${id}/download`,{headers:{Authorization:`Bearer ${access}`}});
+  if(!response.ok)throw Error('Report is unavailable or access has changed.');
+  const url=URL.createObjectURL(await response.blob()),a=document.createElement('a');
+  a.href=url;a.download=name;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
