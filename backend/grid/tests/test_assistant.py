@@ -315,10 +315,11 @@ def test_invalid_workflow_inputs_do_not_mutate(setup,workflow,inputs):
 
 def test_create_resolves_location_but_requires_user_selection(setup):
     _,users,_=setup
-    job=job_for(users['admin'],'site.create',{'site_data':{'name':'New Grid','state':'Bihar','district':'Gaya'},'accept_template':True})
+    job=job_for(users['admin'],'site.create',{'site_data':{'name':'New Grid','state':'Bihar','district':'Gaya'}})
     place={'label':'Gaya, Bihar','district':'Gaya','state':'Bihar','latitude':24.79,'longitude':85.0,'timezone':'Asia/Kolkata'}
     with patch('grid.locations.search',return_value={'results':[place]}):engine.tick(job)
     job.refresh_from_db();assert job.status=='clarification' and job.context['location_choices']==[place]
+    assert 'accept the demo equipment template' in job.question
     assert not m.Site.objects.filter(name='New Grid').exists()
 
 

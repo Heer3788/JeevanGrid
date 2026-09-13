@@ -95,14 +95,15 @@ def validate(job):
     if creating:
         if job.conversation.site_id:v.fail('Create sites from an organization conversation.')
         data=p.get('site_data',{});need(isinstance(data,dict),'Supply the new site configuration.')
+        equipment_note='' if p.get('accept_template') is True or 'configuration' in p else ' Also supply the full equipment configuration, or explicitly say “I accept the demo equipment template.”'
         if data.get('name') and data.get('state') and data.get('district') and ('latitude' not in data or 'longitude' not in data):
             from ..locations import search
             try:choices=search(data['district'],data['state'])['results']
             except LookupError:choices=[]
             job.context['location_choices']=choices
-            raise Clarification('Choose the correct location below, or provide latitude, longitude and timezone. '+('Source: Open-Meteo / GeoNames.' if choices else 'Location search had no available match.'))
+            raise Clarification('Choose the correct location below, or provide latitude, longitude and timezone. '+('Source: Open-Meteo / GeoNames.' if choices else 'Location search had no available match.')+equipment_note)
         required=['name','state','district','latitude','longitude','timezone']
-        need(all(k in data for k in required),'Provide new site '+', '.join(k for k in required if k not in data)+'. Coordinates must be selected or explicitly supplied.')
+        need(all(k in data for k in required),'Provide new site '+', '.join(k for k in required if k not in data)+'. Coordinates must be selected or explicitly supplied.'+equipment_note)
         v.validate_site(data)
         if p.get('accept_template') is not True:need('configuration' in p,'Supply the full equipment configuration, or explicitly accept the demo template.')
         p['configuration']=v.validate_configuration(merge(default_configuration(),p.get('configuration',{})) if p.get('accept_template') is True else p['configuration'])

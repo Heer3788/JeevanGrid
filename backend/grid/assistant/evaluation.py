@@ -1,5 +1,5 @@
 """Versioned interpretation cases. No live database writes or invented model scores."""
-VERSION=1
+VERSION=2
 CONTEXT={'site_scope':None,'sites':[{'id':1,'name':'Leporiang · study reference','archived':False},{'id':2,'name':'Dharnai · village demo','archived':False},{'id':3,'name':'Rewana · village demo','archived':False},{'id':4,'name':'Bijua · enterprise demo','archived':False}], 'attachments':[{'id':7,'name':'demand.csv'},{'id':8,'name':'observations.csv'}]}
 # Different wording, not repeated requests against a model's previous answer.
 GROUPS=[
@@ -75,6 +75,9 @@ GROUPS=[
  'Update Dharnai’s installed solar capacity to 80 kW.','Set the saved solar equipment capacity at Dharnai to 80 kilowatts.','Change Dharnai’s site configuration: solar capacity 0.08 MW.']),
 ]
 GROUPS += [
+ ('site.create',{'site_data':{'name':'siteest','state':'Gujarat','district':'Ahmedabad'}},[
+ 'help me add site\nsiteest Ahmedabad Gujarat',
+ 'Add a new site named siteest in Ahmedabad, Gujarat.']),
  ('site.create',{'site_data':{'name':'Test Grid','state':'Bihar','district':'Gaya','latitude':24.79,'longitude':85.0,'timezone':'Asia/Kolkata'},'accept_template':True},[
  'Create a site named Test Grid in Gaya district, Bihar, latitude 24.79, longitude 85.0, timezone Asia/Kolkata. I accept the demo equipment template.',
  'Add Test Grid: Bihar state, Gaya district, coordinates 24.79 latitude and 85.0 longitude, Asia/Kolkata timezone. Use the demo template; I accept its defaults.',

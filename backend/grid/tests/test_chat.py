@@ -1,4 +1,5 @@
 """Chat failures must be explicit, and a fresh conversation must be isolated."""
+import json
 from unittest.mock import Mock, patch
 import pytest
 from django.test import override_settings
@@ -28,6 +29,23 @@ def test_general_explanation_has_product_context_and_short_answer_guidance():
     assert 'No site records were retrieved' in prompt
     assert 'Minimum SOC is a hard modeled safety limit' in prompt
     assert 'Terminal SOC' in prompt and 'Do not invent site values' in prompt
+
+
+def test_clear_incomplete_action_is_delegated_to_backend_clarification():
+    raw = {'workflow': 'site.create', 'arguments': [
+        {'key': 'site_data.name', 'value_json': '"siteest"', 'quote': 'siteest'},
+        {'key': 'site_data.district', 'value_json': '"Ahmedabad"', 'quote': 'Ahmedabad'},
+        {'key': 'site_data.state', 'value_json': '"Gujarat"', 'quote': 'Gujarat'},
+    ], 'question': '', 'question_kind': 'application'}
+    text = 'help me add site\nsiteest ahmedabad gujarat'
+    with patch('grid.assistant.provider.completion', return_value=json.dumps(raw)) as complete:
+        result = provider.interpret(text, {})
+    assert result['workflow'] == 'site.create'
+    assert result['inputs']['site_data'] == {'name': 'siteest', 'district': 'Ahmedabad', 'state': 'Gujarat'}
+    assert [a['quote'] for a in result['arguments']] == ['siteest', 'ahmedabad', 'gujarat']
+    prompt = complete.call_args.args[0][0]['content']
+    assert 'Do not return clarify merely because' in prompt
+    assert 'Multiple user-message lines are one continuing request' in prompt
 
 
 def test_worker_claim_visible_during_interpretation_and_cancel_respected(setup):
