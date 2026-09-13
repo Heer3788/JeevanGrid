@@ -1,8 +1,8 @@
 # JeevanGrid
 
-### Microgrid energy intelligence for off-grid communities
+### Reliable energy decisions before the weather changes
 
-**JeevanGrid converts weather, demand, equipment limits and live operating state into a reliable 24-hour energy plan for solar, wind, batteries and diesel.** It protects critical demand first, then reduces operating cost, diesel consumption and emissions wherever the site configuration allows.
+**JeevanGrid is an explainable operating intelligence platform for renewable microgrids.** It converts weather, demand, equipment limits and live operating state into a verified 24-hour plan for solar, wind, batteries and diesel—protecting critical electricity first, then reducing cost, fuel use and emissions wherever the physics allows.
 
 [![Frontend](https://img.shields.io/badge/Frontend-React_19-1b806d)](frontend/)
 [![Backend](https://img.shields.io/badge/Backend-Django_REST-17483d)](backend/)
@@ -12,9 +12,35 @@
 
 > **The core idea:** renewable energy should be used aggressively—but never by gambling with the electricity needed for lighting, water, communications or clinic loads.
 
+**[Run locally](#run-locally) · [Five-minute showcase](backend/docs/FINAL_ROUND_SHOWCASE.md) · [Complete walkthrough](backend/docs/LIVE_WALKTHROUGH.md) · [Model and safety boundaries](backend/docs/MODEL_NOTES.md)**
+
 <p align="center">
   <img src="docs/assets/operating-plan.png" alt="JeevanGrid operating plan showing the 24-hour energy mix, battery reserve and diesel schedule" width="900" />
 </p>
+
+## Why this matters
+
+Installing renewable equipment is only half the problem. Every operating day still requires a defensible answer to four questions: **Will critical demand be served? When should the battery charge or discharge? When is diesel genuinely necessary? What changes when weather, demand or equipment availability changes?**
+
+JeevanGrid answers those questions with inspectable evidence rather than a black-box recommendation:
+
+- **Reliability before economics:** critical service is the optimizer's first objective—not a dashboard score added afterwards.
+- **One physical model everywhere:** baseline plans, stress tests and rolling replay use the same constraints and energy-balance checks.
+- **AI with boundaries:** the assistant selects registered workflows; Django enforces permissions and values; the optimizer makes energy decisions; persisted results are read back before success is shown.
+- **Truthful failure:** infeasible plans, stale inputs, provider outages and failed verification are displayed explicitly instead of being rewritten as success.
+
+## What you can prove in five minutes
+
+| Demonstration | Evidence visible in the product |
+|---|---|
+| Generate a 24-hour operating plan | Hourly dispatch, battery SOC, diesel schedule, cost, emissions and input provenance |
+| Cut solar availability by 50% | A newly solved, linked scenario with an unchanged baseline and comparable metrics |
+| Start the digital twin and inject cloud cover | Streaming simulated telemetry, event history, rolling replan and power-balance verification |
+| Ask the assistant to change a record | Permission-scoped workflow, accepted inputs, durable steps and a verified result receipt |
+| Export a PDF/CSV/JSON report | Frozen evidence, source identifiers and content-integrity hash |
+| Compare multiple sites | Normalized reliability, fuel, cost and emissions per supplied unit |
+
+For a presentation-ready route, use **[the five-minute final-round showcase](backend/docs/FINAL_ROUND_SHOWCASE.md)**.
 
 ## The problem
 
@@ -86,7 +112,7 @@ This ordering prevents a monetary penalty from making the optimizer sacrifice cr
 
 Calculated metrics include critical-load service, total energy service, renewable share, diesel litres, dispatch cost, CO₂ emissions, minimum SOC, terminal SOC and reserve compliance. Every hourly interval is checked for power balance.
 
-## Agentic AI that performs verified work
+## Agentic AI that performs verified work—not hidden automation
 
 The assistant is powered by Groq using `openai/gpt-oss-120b`, but the language model is **not** allowed to control the database or calculate dispatch directly.
 
@@ -113,7 +139,9 @@ Implemented assistant workflows include:
 - training forecast models; and
 - exporting PDF, CSV and JSON reports.
 
-Each workflow has typed inputs, a fixed step sequence, role and site checks, durable progress, retry handling and persisted receipts. Mutations are read back from Django before success is reported. The assistant has no arbitrary SQL or Python execution path.
+Each workflow has typed inputs, a fixed step sequence, role and site checks, durable progress, retry handling and persisted receipts. Mutations are read back from Django before success is reported. The assistant has no arbitrary SQL or Python execution path and cannot silently relax engineering limits to manufacture a feasible answer.
+
+The assistant **fails closed** when Groq is unavailable: it reports provider/quota failure and offers a retry instead of guessing. One deliberately narrow, fully anchored site-creation prompt has a local outage-safe parser; it requires every location field and explicit demo-template consent, rejects appended actions, and still passes through the same authorization, validation and verification pipeline.
 
 <p align="center">
   <img src="docs/assets/assistant-workflow.png" alt="JeevanGrid assistant answering an organization-scoped energy question" width="900" />
@@ -279,6 +307,8 @@ python3 backend/dev.py
 
 Open **http://127.0.0.1:5173**. The launcher starts the Django API, Vite frontend, live-simulation worker and assistant/report worker. Manual planning, simulation and reports work without an LLM key.
 
+For a four-terminal presentation setup—with the API and both workers visible independently—use the exact commands in **[backend/README.md](backend/README.md)**.
+
 To enable the assistant:
 
 ```bash
@@ -300,7 +330,14 @@ cd frontend
 npm run build
 ```
 
-Current verified result: **146 backend tests passed** and the React production build completed successfully. Browser walkthroughs live under [`frontend/tests`](frontend/tests/).
+| Release check | Current result |
+|---|---|
+| Backend physics, optimization, permissions, workflows and live lifecycle | **146 passed** |
+| React production build | **Passed** |
+| Chat browser regression | **Passed**—safe rendering, polling, history, fresh-chat isolation and mobile controls |
+| Provider-outage site creation | **Passed** through the strict local parser and normal backend verification |
+
+Browser walkthroughs and captured evidence live under [`frontend/tests`](frontend/tests/) and the ignored `frontend/test-results/` directory.
 
 ## What makes JeevanGrid different
 
