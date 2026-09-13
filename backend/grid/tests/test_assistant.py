@@ -80,6 +80,19 @@ def test_create_workflows(setup,workflow):
     assert list(site.assignments.values_list('user_id',flat=True))==[users['operator'].pk]
 
 
+def test_explicit_create_finishes_during_provider_outage(setup):
+    _,users,_=setup
+    text=('Create a site named Offline Safe Grid in Gaya district, Bihar, latitude 24.79, '
+          'longitude 85.0, timezone Asia/Kolkata. I explicitly accept the demo equipment template.')
+    job=job_for(users['admin'],'',{})
+    job.message.text=text;job.message.save(update_fields=['text'])
+    with override_settings(GROQ_API_KEY=''),patch('grid.assistant.provider.completion',side_effect=AssertionError('provider must not be called')):
+        finish(job)
+    assert job.status=='succeeded',job.error
+    site=m.Site.objects.get(name='Offline Safe Grid')
+    assert site.district=='Gaya' and site.latitude==24.79 and job.result['template_used']
+
+
 @pytest.mark.parametrize('workflow,values,field,expected',[
  ('site.update',{'site_data':{'name':'Changed'}},'name','Changed'),
  ('site.archive',{},'archived',True),('site.restore',{},'archived',False),

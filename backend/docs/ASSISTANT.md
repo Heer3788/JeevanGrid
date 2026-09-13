@@ -32,7 +32,7 @@ To enable natural-language interpretation, copy `backend/.env.example` to the ig
 
 The worker publishes **Working** before calling the model. A message still queued after 30 seconds shows a waiting notice rather than silently appearing to think. An empty or truncated provider reply produces an explicit retry/error outcome. Restart `run_assistant_worker` after changing backend prompts; the normal `backend/dev.py` launcher manages all four services together.
 
-Natural-language requests require a configured provider. Without a key, chat reports provider unavailability. It does not pretend to interpret requests locally. Manual controls, detailed comparison, and PDF/CSV/JSON exports still work.
+Natural-language requests require a configured provider. Without a key, chat reports provider unavailability. One deliberately narrow exception is the exact documented site-creation prompt above: its complete, anchored format is parsed locally, then passed through the same authorization and field validation as model-interpreted requests. Missing consent, missing fields, or appended actions do not use this fallback. Manual controls, detailed comparison, and PDF/CSV/JSON exports still work.
 
 ## Registered operations
 

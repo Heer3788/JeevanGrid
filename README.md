@@ -8,7 +8,7 @@
 [![Backend](https://img.shields.io/badge/Backend-Django_REST-17483d)](backend/)
 [![Optimization](https://img.shields.io/badge/Optimization-PuLP_%2B_HiGHS-c1ef7d)](backend/grid/optimizer.py)
 [![ML](https://img.shields.io/badge/ML-XGBoost-f0bd45)](backend/grid/forecasting.py)
-[![Tests](https://img.shields.io/badge/Backend_tests-141_passing-1b806d)](backend/grid/tests/)
+[![Tests](https://img.shields.io/badge/Backend_tests-146_passing-1b806d)](backend/grid/tests/)
 
 > **The core idea:** renewable energy should be used aggressively—but never by gambling with the electricity needed for lighting, water, communications or clinic loads.
 
@@ -300,7 +300,7 @@ cd frontend
 npm run build
 ```
 
-Current verified result: **141 backend tests passed** and the React production build completed successfully. Browser walkthroughs live under [`frontend/tests`](frontend/tests/).
+Current verified result: **146 backend tests passed** and the React production build completed successfully. Browser walkthroughs live under [`frontend/tests`](frontend/tests/).
 
 ## What makes JeevanGrid different
 

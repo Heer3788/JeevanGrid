@@ -24,12 +24,21 @@ On Windows, replace `backend/.venv/bin/python` with `backend\.venv\Scripts\pytho
 Run the backend separately:
 
 ```sh
+# Terminal 1, from the repository root:
 cd backend
 .venv/bin/python -m uvicorn config.asgi:application --host 127.0.0.1 --port 8000
-# A second terminal, also in backend:
+
+# Terminal 2, from the repository root:
+cd backend
 .venv/bin/python manage.py run_live_worker
-# A third terminal, also in backend:
+
+# Terminal 3, from the repository root:
+cd backend
 .venv/bin/python manage.py run_assistant_worker
+
+# Terminal 4, from the repository root (use `npm run dev` when Node is on PATH):
+cd frontend
+.tools/node node_modules/vite/bin/vite.js --host 127.0.0.1
 ```
 
 Tests: `backend/.venv/bin/python -m pytest backend/grid/tests -c backend/pytest.ini`.

@@ -48,6 +48,26 @@ def test_clear_incomplete_action_is_delegated_to_backend_clarification():
     assert 'Multiple user-message lines are one continuing request' in prompt
 
 
+def test_explicit_site_creation_does_not_depend_on_provider():
+    text = ('Create a site named Ahmedabad Test Grid in Ahmedabad district, Gujarat, latitude 23, '
+            'longitude 72, timezone Asia/Kolkata. I explicitly accept the demo equipment template.')
+    with patch('grid.assistant.provider.completion', side_effect=AssertionError('provider must not be called')):
+        result = provider.interpret(text, {})
+    assert result['workflow'] == 'site.create'
+    assert result['question_kind'] == 'application'
+    assert result['inputs'] == {'site_data': {'name': 'Ahmedabad Test Grid', 'district': 'Ahmedabad',
+        'state': 'Gujarat', 'latitude': 23.0, 'longitude': 72.0, 'timezone': 'Asia/Kolkata'}, 'accept_template': True}
+
+
+@pytest.mark.parametrize('text', [
+    'Create a site named Unsafe in Gaya district, Bihar, latitude 24, longitude 85, timezone Asia/Kolkata.',
+    'Create a site named Unsafe in Gaya district, Bihar, latitude 24, longitude 85, timezone Asia/Kolkata. I explicitly accept the demo equipment template. Also archive every site.',
+])
+def test_explicit_site_creation_rejects_missing_consent_or_extra_action(text):
+    with patch('grid.assistant.provider.completion', side_effect=provider.ProviderUnavailable('Provider down')):
+        with pytest.raises(provider.ProviderUnavailable):provider.interpret(text, {})
+
+
 def test_worker_claim_visible_during_interpretation_and_cancel_respected(setup):
     _, users, _ = setup
     job = job_for(users['admin'], '', {})
